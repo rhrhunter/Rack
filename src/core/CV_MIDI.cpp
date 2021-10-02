@@ -6,8 +6,8 @@ namespace core {
 
 
 struct MidiOutput : dsp::MidiGenerator<PORT_MAX_CHANNELS>, midi::Output {
-	void onMessage(midi::Message message) override {
-		midi::Output::sendMessage(message);
+	void onMessage(const midi::Message& message) override {
+		Output::sendMessage(message);
 	}
 
 	void reset() {
@@ -44,10 +44,22 @@ struct CV_MIDI : Module {
 	};
 
 	MidiOutput midiOutput;
-	float rateLimiterPhase = 0.f;
+	dsp::Timer rateLimiterTimer;
 
 	CV_MIDI() {
 		config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
+		configInput(PITCH_INPUT, "Pitch (1V/oct)");
+		configInput(GATE_INPUT, "Gate");
+		configInput(VEL_INPUT, "Velocity");
+		configInput(AFT_INPUT, "Aftertouch");
+		configInput(PW_INPUT, "Pitch wheel");
+		configInput(MW_INPUT, "Mod wheel");
+		configInput(CLK_INPUT, "Clock");
+		configInput(VOL_INPUT, "Volume");
+		configInput(PAN_INPUT, "Pan");
+		configInput(START_INPUT, "Start trigger");
+		configInput(STOP_INPUT, "Stop trigger");
+		configInput(CONTINUE_INPUT, "Continue trigger");
 		onReset();
 	}
 
@@ -56,14 +68,15 @@ struct CV_MIDI : Module {
 	}
 
 	void process(const ProcessArgs& args) override {
-		const float rateLimiterPeriod = 0.005f;
-		rateLimiterPhase += args.sampleTime / rateLimiterPeriod;
-		if (rateLimiterPhase >= 1.f) {
-			rateLimiterPhase -= 1.f;
-		}
-		else {
-			return;
-		}
+		// MIDI baud rate is 31250 b/s, or 3125 B/s.
+		// CC messages are 3 bytes, so we can send a maximum of 1041 CC messages per second.
+		// Since multiple CCs can be generated, play it safe and limit the CC rate to 200 Hz.
+		const float rateLimiterPeriod = 1 / 200.f;
+		bool rateLimiterTriggered = (rateLimiterTimer.process(args.sampleTime) >= rateLimiterPeriod);
+		if (rateLimiterTriggered)
+			rateLimiterTimer.time -= rateLimiterPeriod;
+
+		midiOutput.setFrame(args.frame);
 
 		for (int c = 0; c < inputs[PITCH_INPUT].getChannels(); c++) {
 			int vel = (int) std::round(inputs[VEL_INPUT].getNormalPolyVoltage(10.f * 100 / 127, c) / 10.f * 127);
@@ -80,21 +93,23 @@ struct CV_MIDI : Module {
 			midiOutput.setKeyPressure(aft, c);
 		}
 
-		int pw = (int) std::round((inputs[PW_INPUT].getVoltage() + 5.f) / 10.f * 0x4000);
-		pw = clamp(pw, 0, 0x3fff);
-		midiOutput.setPitchWheel(pw);
+		if (rateLimiterTriggered) {
+			int pw = (int) std::round((inputs[PW_INPUT].getVoltage() + 5.f) / 10.f * 0x4000);
+			pw = clamp(pw, 0, 0x3fff);
+			midiOutput.setPitchWheel(pw);
 
-		int mw = (int) std::round(inputs[MW_INPUT].getVoltage() / 10.f * 127);
-		mw = clamp(mw, 0, 127);
-		midiOutput.setModWheel(mw);
+			int mw = (int) std::round(inputs[MW_INPUT].getVoltage() / 10.f * 127);
+			mw = clamp(mw, 0, 127);
+			midiOutput.setModWheel(mw);
 
-		int vol = (int) std::round(inputs[VOL_INPUT].getNormalVoltage(10.f) / 10.f * 127);
-		vol = clamp(vol, 0, 127);
-		midiOutput.setVolume(vol);
+			int vol = (int) std::round(inputs[VOL_INPUT].getNormalVoltage(10.f) / 10.f * 127);
+			vol = clamp(vol, 0, 127);
+			midiOutput.setVolume(vol);
 
-		int pan = (int) std::round((inputs[PAN_INPUT].getVoltage() + 5.f) / 10.f * 127);
-		pan = clamp(pan, 0, 127);
-		midiOutput.setPan(pan);
+			int pan = (int) std::round((inputs[PAN_INPUT].getVoltage() + 5.f) / 10.f * 127);
+			pan = clamp(pan, 0, 127);
+			midiOutput.setPan(pan);
+		}
 
 		bool clk = inputs[CLK_INPUT].getVoltage() >= 1.f;
 		midiOutput.setClock(clk);
@@ -125,7 +140,7 @@ struct CV_MIDI : Module {
 
 struct CV_MIDIPanicItem : MenuItem {
 	CV_MIDI* module;
-	void onAction(const event::Action& e) override {
+	void onAction(const ActionEvent& e) override {
 		module->midiOutput.panic();
 	}
 };
@@ -134,7 +149,7 @@ struct CV_MIDIPanicItem : MenuItem {
 struct CV_MIDIWidget : ModuleWidget {
 	CV_MIDIWidget(CV_MIDI* module) {
 		setModule(module);
-		setPanel(APP->window->loadSvg(asset::system("res/Core/CV-MIDI.svg")));
+		setPanel(Svg::load(asset::system("res/Core/CV-MIDI.svg")));
 
 		addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));
 		addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, 0)));
@@ -163,12 +178,11 @@ struct CV_MIDIWidget : ModuleWidget {
 	void appendContextMenu(Menu* menu) override {
 		CV_MIDI* module = dynamic_cast<CV_MIDI*>(this->module);
 
-		menu->addChild(new MenuEntry);
+		menu->addChild(new MenuSeparator);
 
-		CV_MIDIPanicItem* panicItem = new CV_MIDIPanicItem;
-		panicItem->text = "Panic";
-		panicItem->module = module;
-		menu->addChild(panicItem);
+		menu->addChild(createMenuItem("Panic", "",
+			[=]() {module->midiOutput.panic();}
+		));
 	}
 };
 

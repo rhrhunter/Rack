@@ -1,27 +1,35 @@
+#include <thread>
+#include <utility>
+
+#include <osdialog.h>
+
 #include <app/MenuBar.hpp>
-#include <window.hpp>
-#include <engine/Engine.hpp>
-#include <asset.hpp>
+#include <app/TipWindow.hpp>
+#include <widget/OpaqueWidget.hpp>
 #include <ui/Button.hpp>
 #include <ui/MenuItem.hpp>
+#include <ui/MenuSeparator.hpp>
 #include <ui/SequentialLayout.hpp>
 #include <ui/Slider.hpp>
 #include <ui/TextField.hpp>
 #include <ui/PasswordField.hpp>
 #include <ui/ProgressBar.hpp>
-#include <app.hpp>
+#include <ui/Label.hpp>
+#include <engine/Engine.hpp>
+#include <window/Window.hpp>
+#include <asset.hpp>
+#include <context.hpp>
 #include <settings.hpp>
 #include <helpers.hpp>
 #include <system.hpp>
 #include <plugin.hpp>
 #include <patch.hpp>
-#include <updater.hpp>
-#include <osdialog.h>
-#include <thread>
+#include <library.hpp>
 
 
 namespace rack {
 namespace app {
+namespace menuBar {
 
 
 struct MenuButton : ui::Button {
@@ -40,6 +48,7 @@ struct MenuButton : ui::Button {
 	}
 };
 
+
 struct NotificationIcon : widget::Widget {
 	void draw(const DrawArgs& args) override {
 		nvgBeginPath(args.vg);
@@ -52,176 +61,123 @@ struct NotificationIcon : widget::Widget {
 	}
 };
 
-struct UrlItem : ui::MenuItem {
-	std::string url;
-	void onAction(const event::Action& e) override {
-		std::thread t([ = ] {
-			system::openBrowser(url);
-		});
-		t.detach();
-	}
-};
-
-struct FolderItem : ui::MenuItem {
-	std::string path;
-	void onAction(const event::Action& e) override {
-		std::thread t([ = ] {
-			system::openFolder(path);
-		});
-		t.detach();
-	}
-};
 
 ////////////////////
 // File
 ////////////////////
 
-struct NewItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->patch->resetDialog();
-	}
-};
-
-struct OpenItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->patch->loadDialog();
-	}
-};
-
-struct SaveItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->patch->saveDialog();
-	}
-};
-
-struct SaveAsItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->patch->saveAsDialog();
-	}
-};
-
-struct SaveTemplateItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->patch->saveTemplateDialog();
-	}
-};
-
-struct RevertItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->patch->revertDialog();
-	}
-};
-
-struct QuitItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->window->close();
-	}
-};
 
 struct FileButton : MenuButton {
-	void onAction(const event::Action& e) override {
+	void onAction(const ActionEvent& e) override {
 		ui::Menu* menu = createMenu();
+		menu->cornerFlags = BND_CORNER_TOP;
 		menu->box.pos = getAbsoluteOffset(math::Vec(0, box.size.y));
-		menu->box.size.x = box.size.x;
 
-		NewItem* newItem = new NewItem;
-		newItem->text = "New";
-		newItem->rightText = RACK_MOD_CTRL_NAME "+N";
-		menu->addChild(newItem);
+		menu->addChild(createMenuItem("New", RACK_MOD_CTRL_NAME "+N", []() {
+			APP->patch->loadTemplateDialog();
+		}));
 
-		OpenItem* openItem = new OpenItem;
-		openItem->text = "Open";
-		openItem->rightText = RACK_MOD_CTRL_NAME "+O";
-		menu->addChild(openItem);
+		menu->addChild(createMenuItem("Open", RACK_MOD_CTRL_NAME "+O", []() {
+			APP->patch->loadDialog();
+		}));
 
-		SaveItem* saveItem = new SaveItem;
-		saveItem->text = "Save";
-		saveItem->rightText = RACK_MOD_CTRL_NAME "+S";
-		menu->addChild(saveItem);
+		menu->addChild(createSubmenuItem("Open recent", "", [](ui::Menu* menu) {
+			for (const std::string& path : settings::recentPatchPaths) {
+				std::string name = system::getStem(path);
+				menu->addChild(createMenuItem(name, "", [=]() {
+					APP->patch->loadPathDialog(path);
+				}));
+			}
+		}, settings::recentPatchPaths.empty()));
 
-		SaveAsItem* saveAsItem = new SaveAsItem;
-		saveAsItem->text = "Save as";
-		saveAsItem->rightText = RACK_MOD_CTRL_NAME "+Shift+S";
-		menu->addChild(saveAsItem);
+		menu->addChild(createMenuItem("Save", RACK_MOD_CTRL_NAME "+S", []() {
+			APP->patch->saveDialog();
+		}));
 
-		SaveTemplateItem* saveTemplateItem = new SaveTemplateItem;
-		saveTemplateItem->text = "Save template";
-		menu->addChild(saveTemplateItem);
+		menu->addChild(createMenuItem("Save as", RACK_MOD_CTRL_NAME "+Shift+S", []() {
+			APP->patch->saveAsDialog();
+		}));
 
-		RevertItem* revertItem = new RevertItem;
-		revertItem->text = "Revert";
-		revertItem->rightText = RACK_MOD_CTRL_NAME "+" RACK_MOD_SHIFT_NAME "+O";
-		menu->addChild(revertItem);
+		menu->addChild(createMenuItem("Save template", "", []() {
+			APP->patch->saveTemplateDialog();
+		}));
 
-		QuitItem* quitItem = new QuitItem;
-		quitItem->text = "Quit";
-		quitItem->rightText = RACK_MOD_CTRL_NAME "+Q";
-		menu->addChild(quitItem);
+		menu->addChild(createMenuItem("Revert", RACK_MOD_CTRL_NAME "+" RACK_MOD_SHIFT_NAME "+O", []() {
+			APP->patch->revertDialog();
+		}, APP->patch->path == ""));
+
+		menu->addChild(new ui::MenuSeparator);
+
+		menu->addChild(createMenuItem("Quit", RACK_MOD_CTRL_NAME "+Q", []() {
+			APP->window->close();
+		}));
 	}
 };
+
 
 ////////////////////
 // Edit
 ////////////////////
 
-struct UndoItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->history->undo();
-	}
-};
-
-struct RedoItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->history->redo();
-	}
-};
-
-struct DisconnectCablesItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->patch->disconnectDialog();
-	}
-};
 
 struct EditButton : MenuButton {
-	void onAction(const event::Action& e) override {
+	void onAction(const ActionEvent& e) override {
 		ui::Menu* menu = createMenu();
+		menu->cornerFlags = BND_CORNER_TOP;
 		menu->box.pos = getAbsoluteOffset(math::Vec(0, box.size.y));
-		menu->box.size.x = box.size.x;
 
-		UndoItem* undoItem = new UndoItem;
-		undoItem->text = "Undo " + APP->history->getUndoName();
-		undoItem->rightText = RACK_MOD_CTRL_NAME "+Z";
-		undoItem->disabled = !APP->history->canUndo();
-		menu->addChild(undoItem);
+		struct UndoItem : ui::MenuItem {
+			void step() override {
+				text = "Undo " + APP->history->getUndoName();
+				disabled = !APP->history->canUndo();
+				MenuItem::step();
+			}
+			void onAction(const ActionEvent& e) override {
+				APP->history->undo();
+			}
+		};
+		menu->addChild(createMenuItem<UndoItem>("", RACK_MOD_CTRL_NAME "+Z"));
 
-		RedoItem* redoItem = new RedoItem;
-		redoItem->text = "Redo " + APP->history->getRedoName();
-		redoItem->rightText = RACK_MOD_CTRL_NAME "+" RACK_MOD_SHIFT_NAME "+Z";
-		redoItem->disabled = !APP->history->canRedo();
-		menu->addChild(redoItem);
+		struct RedoItem : ui::MenuItem {
+			void step() override {
+				text = "Redo " + APP->history->getRedoName();
+				disabled = !APP->history->canRedo();
+				MenuItem::step();
+			}
+			void onAction(const ActionEvent& e) override {
+				APP->history->redo();
+			}
+		};
+		menu->addChild(createMenuItem<RedoItem>("", RACK_MOD_CTRL_NAME "+" RACK_MOD_SHIFT_NAME "+Z"));
 
-		DisconnectCablesItem* disconnectCablesItem = new DisconnectCablesItem;
-		disconnectCablesItem->text = "Clear cables";
-		menu->addChild(disconnectCablesItem);
+		menu->addChild(createMenuItem("Clear cables", "", [=]() {
+			APP->patch->disconnectDialog();
+		}));
+
+		menu->addChild(new ui::MenuSeparator);
+
+		APP->scene->rack->appendSelectionContextMenu(menu);
 	}
 };
+
 
 ////////////////////
 // View
 ////////////////////
 
+
 struct ZoomQuantity : Quantity {
 	void setValue(float value) override {
-		settings::zoom = value;
+		settings::zoom = math::clamp(value, getMinValue(), getMaxValue());
 	}
 	float getValue() override {
 		return settings::zoom;
 	}
 	float getMinValue() override {
-		return -2.0;
+		return settings::zoomMin;
 	}
 	float getMaxValue() override {
-		return 2.0;
+		return settings::zoomMax;
 	}
 	float getDefaultValue() override {
 		return 0.0;
@@ -239,7 +195,6 @@ struct ZoomQuantity : Quantity {
 		return "%";
 	}
 };
-
 struct ZoomSlider : ui::Slider {
 	ZoomSlider() {
 		quantity = new ZoomQuantity;
@@ -248,6 +203,7 @@ struct ZoomSlider : ui::Slider {
 		delete quantity;
 	}
 };
+
 
 struct CableOpacityQuantity : Quantity {
 	void setValue(float value) override {
@@ -272,7 +228,6 @@ struct CableOpacityQuantity : Quantity {
 		return "%";
 	}
 };
-
 struct CableOpacitySlider : ui::Slider {
 	CableOpacitySlider() {
 		quantity = new CableOpacityQuantity;
@@ -281,6 +236,7 @@ struct CableOpacitySlider : ui::Slider {
 		delete quantity;
 	}
 };
+
 
 struct CableTensionQuantity : Quantity {
 	void setValue(float value) override {
@@ -299,7 +255,6 @@ struct CableTensionQuantity : Quantity {
 		return 2;
 	}
 };
-
 struct CableTensionSlider : ui::Slider {
 	CableTensionSlider() {
 		quantity = new CableTensionQuantity;
@@ -309,355 +264,422 @@ struct CableTensionSlider : ui::Slider {
 	}
 };
 
-struct ParamTooltipItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		settings::paramTooltip ^= true;
+
+struct RackBrightnessQuantity : Quantity {
+	void setValue(float value) override {
+		settings::rackBrightness = math::clamp(value, getMinValue(), getMaxValue());
+	}
+	float getValue() override {
+		return settings::rackBrightness;
+	}
+	float getDefaultValue() override {
+		return 1.0;
+	}
+	float getDisplayValue() override {
+		return getValue() * 100;
+	}
+	void setDisplayValue(float displayValue) override {
+		setValue(displayValue / 100);
+	}
+	std::string getUnit() override {
+		return "%";
+	}
+	std::string getLabel() override {
+		return "Room brightness";
+	}
+	int getDisplayPrecision() override {
+		return 3;
+	}
+};
+struct RackBrightnessSlider : ui::Slider {
+	RackBrightnessSlider() {
+		quantity = new RackBrightnessQuantity;
+	}
+	~RackBrightnessSlider() {
+		delete quantity;
 	}
 };
 
-struct LockModulesItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		settings::lockModules ^= true;
+
+struct HaloBrightnessQuantity : Quantity {
+	void setValue(float value) override {
+		settings::haloBrightness = math::clamp(value, getMinValue(), getMaxValue());
+	}
+	float getValue() override {
+		return settings::haloBrightness;
+	}
+	float getDefaultValue() override {
+		return 0.25;
+	}
+	float getDisplayValue() override {
+		return getValue() * 100;
+	}
+	void setDisplayValue(float displayValue) override {
+		setValue(displayValue / 100);
+	}
+	std::string getUnit() override {
+		return "%";
+	}
+	std::string getLabel() override {
+		return "Light bloom";
+	}
+	int getDisplayPrecision() override {
+		return 3;
+	}
+};
+struct HaloBrightnessSlider : ui::Slider {
+	HaloBrightnessSlider() {
+		quantity = new HaloBrightnessQuantity;
+	}
+	~HaloBrightnessSlider() {
+		delete quantity;
 	}
 };
 
-struct CursorLockItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		settings::allowCursorLock ^= true;
+
+struct KnobScrollSensitivityQuantity : Quantity {
+	void setValue(float value) override {
+		value = math::clamp(value, getMinValue(), getMaxValue());
+		settings::knobScrollSensitivity = std::pow(2.f, value);
+	}
+	float getValue() override {
+		return std::log2(settings::knobScrollSensitivity);
+	}
+	float getMinValue() override {
+		return std::log2(1e-4f);
+	}
+	float getMaxValue() override {
+		return std::log2(1e-2f);
+	}
+	float getDefaultValue() override {
+		return std::log2(1e-3f);
+	}
+	float getDisplayValue() override {
+		return std::pow(2.f, getValue() - getDefaultValue());
+	}
+	void setDisplayValue(float displayValue) override {
+		setValue(std::log2(displayValue) + getDefaultValue());
+	}
+	std::string getLabel() override {
+		return "Scroll wheel knob sensitivity";
+	}
+	int getDisplayPrecision() override {
+		return 2;
+	}
+};
+struct KnobScrollSensitivitySlider : ui::Slider {
+	KnobScrollSensitivitySlider() {
+		quantity = new KnobScrollSensitivityQuantity;
+	}
+	~KnobScrollSensitivitySlider() {
+		delete quantity;
 	}
 };
 
-struct FrameRateValueItem : ui::MenuItem {
-	int frameSwapInterval;
-	void onAction(const event::Action& e) override {
-		settings::frameSwapInterval = frameSwapInterval;
-	}
-};
-
-struct FrameRateItem : ui::MenuItem {
-	ui::Menu* createChildMenu() override {
-		ui::Menu* menu = new ui::Menu;
-
-		for (int i = 1; i <= 6; i++) {
-			float frameRate = APP->window->getMonitorRefreshRate() / i;
-
-			FrameRateValueItem* item = new FrameRateValueItem;
-			item->frameSwapInterval = i;
-			item->text = string::f("%.0f Hz", frameRate);
-			item->rightText += CHECKMARK(settings::frameSwapInterval == i);
-			menu->addChild(item);
-		}
-		return menu;
-	}
-};
-
-struct FullscreenItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->window->setFullScreen(!APP->window->isFullScreen());
-	}
-};
 
 struct ViewButton : MenuButton {
-	void onAction(const event::Action& e) override {
+	void onAction(const ActionEvent& e) override {
 		ui::Menu* menu = createMenu();
+		menu->cornerFlags = BND_CORNER_TOP;
 		menu->box.pos = getAbsoluteOffset(math::Vec(0, box.size.y));
-		menu->box.size.x = box.size.x;
 
-		ParamTooltipItem* paramTooltipItem = new ParamTooltipItem;
-		paramTooltipItem->text = "Parameter tooltips";
-		paramTooltipItem->rightText = CHECKMARK(settings::paramTooltip);
-		menu->addChild(paramTooltipItem);
-
-		LockModulesItem* lockModulesItem = new LockModulesItem;
-		lockModulesItem->text = "Lock modules";
-		lockModulesItem->rightText = CHECKMARK(settings::lockModules);
-		menu->addChild(lockModulesItem);
-
-		CursorLockItem* cursorLockItem = new CursorLockItem;
-		cursorLockItem->text = "Lock cursor while dragging";
-		cursorLockItem->rightText = CHECKMARK(settings::allowCursorLock);
-		menu->addChild(cursorLockItem);
+		menu->addChild(createBoolPtrMenuItem("Show tooltips", &settings::tooltips));
 
 		ZoomSlider* zoomSlider = new ZoomSlider;
-		zoomSlider->box.size.x = 200.0;
+		zoomSlider->box.size.x = 250.0;
 		menu->addChild(zoomSlider);
 
 		CableOpacitySlider* cableOpacitySlider = new CableOpacitySlider;
-		cableOpacitySlider->box.size.x = 200.0;
+		cableOpacitySlider->box.size.x = 250.0;
 		menu->addChild(cableOpacitySlider);
 
 		CableTensionSlider* cableTensionSlider = new CableTensionSlider;
-		cableTensionSlider->box.size.x = 200.0;
+		cableTensionSlider->box.size.x = 250.0;
 		menu->addChild(cableTensionSlider);
 
-		FrameRateItem* frameRateItem = new FrameRateItem;
-		frameRateItem->text = "Frame rate";
-		menu->addChild(frameRateItem);
+		RackBrightnessSlider* rackBrightnessSlider = new RackBrightnessSlider;
+		rackBrightnessSlider->box.size.x = 250.0;
+		menu->addChild(rackBrightnessSlider);
 
-		FullscreenItem* fullscreenItem = new FullscreenItem;
-		fullscreenItem->text = "Fullscreen";
-		fullscreenItem->rightText = "F11";
-		if (APP->window->isFullScreen())
-			fullscreenItem->rightText = CHECKMARK_STRING " " + fullscreenItem->rightText;
-		menu->addChild(fullscreenItem);
+		HaloBrightnessSlider* haloBrightnessSlider = new HaloBrightnessSlider;
+		haloBrightnessSlider->box.size.x = 250.0;
+		menu->addChild(haloBrightnessSlider);
+
+		double frameRate = APP->window->getMonitorRefreshRate() / settings::frameSwapInterval;
+		menu->addChild(createSubmenuItem("Frame rate", string::f("%.0f Hz", frameRate), [=](ui::Menu* menu) {
+			for (int i = 1; i <= 6; i++) {
+				double frameRate = APP->window->getMonitorRefreshRate() / i;
+				menu->addChild(createCheckMenuItem(string::f("%.0f Hz", frameRate),
+					[=]() {return settings::frameSwapInterval == i;},
+					[=]() {settings::frameSwapInterval = i;}
+				));
+			}
+		}));
+
+		bool fullscreen = APP->window->isFullScreen();
+		std::string fullscreenText = "F11";
+		if (fullscreen)
+			fullscreenText += " " CHECKMARK_STRING;
+		menu->addChild(createMenuItem("Fullscreen", fullscreenText, [=]() {
+			APP->window->setFullScreen(!fullscreen);
+		}));
+
+		menu->addChild(new ui::MenuSeparator);
+
+		menu->addChild(createBoolPtrMenuItem("Hide cursor while dragging", &settings::allowCursorLock));
+
+		static const std::vector<std::string> knobModeLabels = {
+			"Linear",
+			"Scaled linear",
+			"Absolute rotary",
+			"Relative rotary",
+		};
+		static const std::vector<int> knobModes = {0, 2, 3};
+		menu->addChild(createSubmenuItem("Knob mode", knobModeLabels[settings::knobMode], [=](ui::Menu* menu) {
+			for (int knobMode : knobModes) {
+				menu->addChild(createCheckMenuItem(knobModeLabels[knobMode],
+					[=]() {return settings::knobMode == knobMode;},
+					[=]() {settings::knobMode = (settings::KnobMode) knobMode;}
+				));
+			}
+		}));
+
+		menu->addChild(createBoolPtrMenuItem("Scroll wheel knob control", &settings::knobScroll));
+
+		KnobScrollSensitivitySlider* knobScrollSensitivitySlider = new KnobScrollSensitivitySlider;
+		knobScrollSensitivitySlider->box.size.x = 250.0;
+		menu->addChild(knobScrollSensitivitySlider);
+
+		menu->addChild(createBoolPtrMenuItem("Lock module positions", &settings::lockModules));
 	}
 };
+
 
 ////////////////////
 // Engine
 ////////////////////
 
-struct CpuMeterItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		settings::cpuMeter ^= true;
-	}
-};
-
-struct EnginePauseItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		APP->engine->setPaused(!APP->engine->isPaused());
-	}
-};
-
-struct SampleRateValueItem : ui::MenuItem {
-	float sampleRate;
-	void onAction(const event::Action& e) override {
-		settings::sampleRate = sampleRate;
-		APP->engine->setPaused(false);
-	}
-};
 
 struct SampleRateItem : ui::MenuItem {
 	ui::Menu* createChildMenu() override {
 		ui::Menu* menu = new ui::Menu;
 
-		EnginePauseItem* enginePauseItem = new EnginePauseItem;
-		enginePauseItem->text = "Pause";
-		enginePauseItem->rightText = CHECKMARK(APP->engine->isPaused());
-		menu->addChild(enginePauseItem);
+		// Auto sample rate
+		std::string rightText;
+		if (settings::sampleRate == 0) {
+			float sampleRate = APP->engine->getSampleRate();
+			rightText += string::f("(%g kHz) ", sampleRate / 1000.f);
+			rightText += CHECKMARK_STRING;
+		}
+		menu->addChild(createMenuItem("Auto", rightText, [=]() {
+			settings::sampleRate = 0;
+		}));
 
-		for (int i = 0; i <= 4; i++) {
+		// Power-of-2 oversample times 44.1kHz or 48kHz
+		for (int i = -2; i <= 4; i++) {
 			for (int j = 0; j < 2; j++) {
-				int oversample = 1 << i;
+				float oversample = std::pow(2.f, i);
 				float sampleRate = (j == 0) ? 44100.f : 48000.f;
 				sampleRate *= oversample;
 
-				SampleRateValueItem* item = new SampleRateValueItem;
-				item->sampleRate = sampleRate;
-				item->text = string::f("%g kHz", sampleRate / 1000.0);
-				if (oversample > 1)
-					item->rightText += string::f("(%dx)", oversample);
-				item->rightText += " ";
-				item->rightText += CHECKMARK(settings::sampleRate == sampleRate);
-				menu->addChild(item);
+				std::string text = string::f("%g kHz", sampleRate / 1000.f);
+				std::string rightText;
+				if (oversample > 1.f) {
+					rightText += string::f("(%.0fx)", oversample);
+				}
+				else if (oversample < 1.f) {
+					rightText += string::f("(1/%.0fx)", 1.f / oversample);
+				}
+				rightText += " ";
+				rightText += CHECKMARK(settings::sampleRate == sampleRate);
+				menu->addChild(createMenuItem(text, rightText, [=]() {
+					settings::sampleRate = sampleRate;
+				}));
 			}
 		}
 		return menu;
 	}
 };
 
-struct RealTimeItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		settings::realTime ^= true;
-	}
-};
-
-struct ThreadCountValueItem : ui::MenuItem {
-	int threadCount;
-	void setThreadCount(int threadCount) {
-		this->threadCount = threadCount;
-		text = string::f("%d", threadCount);
-		if (threadCount == system::getLogicalCoreCount() / 2)
-			text += " (most modules)";
-		else if (threadCount == 1)
-			text += " (lowest CPU usage)";
-		rightText = CHECKMARK(settings::threadCount == threadCount);
-	}
-	void onAction(const event::Action& e) override {
-		settings::threadCount = threadCount;
-	}
-};
-
-struct ThreadCountItem : ui::MenuItem {
-	ui::Menu* createChildMenu() override {
-		ui::Menu* menu = new ui::Menu;
-
-		RealTimeItem* realTimeItem = new RealTimeItem;
-		realTimeItem->text = "Real-time priority";
-		realTimeItem->rightText = CHECKMARK(settings::realTime);
-		menu->addChild(realTimeItem);
-
-		int coreCount = system::getLogicalCoreCount();
-		for (int i = 1; i <= coreCount; i++) {
-			ThreadCountValueItem* item = new ThreadCountValueItem;
-			item->setThreadCount(i);
-			menu->addChild(item);
-		}
-		return menu;
-	}
-};
 
 struct EngineButton : MenuButton {
-	void onAction(const event::Action& e) override {
+	void onAction(const ActionEvent& e) override {
 		ui::Menu* menu = createMenu();
+		menu->cornerFlags = BND_CORNER_TOP;
 		menu->box.pos = getAbsoluteOffset(math::Vec(0, box.size.y));
-		menu->box.size.x = box.size.x;
 
-		CpuMeterItem* cpuMeterItem = new CpuMeterItem;
-		cpuMeterItem->text = "CPU meter";
-		cpuMeterItem->rightText = "F3 ";
-		cpuMeterItem->rightText += CHECKMARK(settings::cpuMeter);
-		menu->addChild(cpuMeterItem);
+		std::string cpuMeterText = "F3";
+		if (settings::cpuMeter)
+			cpuMeterText += " " CHECKMARK_STRING;
+		menu->addChild(createMenuItem("Performance meters", cpuMeterText, [=]() {
+			settings::cpuMeter ^= true;
+		}));
 
 		SampleRateItem* sampleRateItem = new SampleRateItem;
 		sampleRateItem->text = "Sample rate";
 		sampleRateItem->rightText = RIGHT_ARROW;
 		menu->addChild(sampleRateItem);
 
-		ThreadCountItem* threadCount = new ThreadCountItem;
-		threadCount->text = "Threads";
-		threadCount->rightText = RIGHT_ARROW;
-		menu->addChild(threadCount);
+		menu->addChild(createSubmenuItem("Threads", string::f("%d", settings::threadCount), [=](ui::Menu* menu) {
+			// BUG This assumes SMT is enabled.
+			int cores = system::getLogicalCoreCount() / 2;
+
+			for (int i = 1; i <= 2 * cores; i++) {
+				std::string rightText;
+				if (i == cores)
+					rightText += "(most modules)";
+				else if (i == 1)
+					rightText += "(lowest CPU usage)";
+				if (settings::threadCount == i)
+					rightText += " " CHECKMARK_STRING;
+				menu->addChild(createMenuItem(string::f("%d", i), rightText, [=]() {
+					settings::threadCount = i;
+				}));
+			}
+		}));
 	}
 };
+
 
 ////////////////////
 // Plugins
 ////////////////////
 
+
 static bool isLoggingIn = false;
 
-struct AccountEmailField : ui::TextField {
-	ui::TextField* passwordField;
-	void onSelectKey(const event::SelectKey& e) override {
-		if (e.action == GLFW_PRESS && e.key == GLFW_KEY_TAB) {
-			APP->event->setSelected(passwordField);
-			e.consume(this);
-		}
-
-		if (!e.getTarget())
-			ui::TextField::onSelectKey(e);
-	}
-};
 
 struct AccountPasswordField : ui::PasswordField {
 	ui::MenuItem* logInItem;
-
-	void onSelectKey(const event::SelectKey& e) override {
-		if (e.action == GLFW_PRESS && (e.key == GLFW_KEY_ENTER || e.key == GLFW_KEY_KP_ENTER)) {
-			logInItem->doAction();
-			e.consume(this);
-		}
-
-		if (!e.getTarget())
-			ui::PasswordField::onSelectKey(e);
+	void onAction(const ActionEvent& e) override {
+		logInItem->doAction();
 	}
 };
+
 
 struct LogInItem : ui::MenuItem {
 	ui::TextField* emailField;
 	ui::TextField* passwordField;
-	void onAction(const event::Action& e) override {
+
+	void onAction(const ActionEvent& e) override {
 		isLoggingIn = true;
 		std::string email = emailField->text;
 		std::string password = passwordField->text;
-		std::thread t([ = ] {
-			plugin::logIn(email, password);
+		std::thread t([=] {
+			library::logIn(email, password);
 			isLoggingIn = false;
 		});
 		t.detach();
-		e.consume(NULL);
+		e.unconsume();
 	}
 
 	void step() override {
 		disabled = isLoggingIn;
 		text = "Log in";
-		rightText = plugin::loginStatus;
+		rightText = library::loginStatus;
 		MenuItem::step();
 	}
 };
 
-struct SyncItem : ui::MenuItem {
+
+struct SyncUpdatesItem : ui::MenuItem {
 	void step() override {
-		disabled = true;
-		if (plugin::updateStatus != "") {
-			text = plugin::updateStatus;
+		if (library::updateStatus != "") {
+			text = library::updateStatus;
 		}
-		else if (plugin::isSyncing()) {
+		else if (library::isSyncing) {
 			text = "Updating...";
 		}
-		else if (!plugin::hasUpdates()) {
+		else if (!library::hasUpdates()) {
 			text = "Up-to-date";
 		}
 		else {
 			text = "Update all";
-			disabled = false;
 		}
+
+		disabled = library::isSyncing || !library::hasUpdates();
 		MenuItem::step();
 	}
 
-	void onAction(const event::Action& e) override {
-		std::thread t([ = ] {
-			plugin::syncUpdates();
+	void onAction(const ActionEvent& e) override {
+		std::thread t([=] {
+			library::syncUpdates();
 		});
 		t.detach();
-		e.consume(NULL);
+		e.unconsume();
 	}
 };
 
-struct PluginSyncItem : ui::MenuItem {
-	plugin::Update* update;
 
-	void setUpdate(plugin::Update* update) {
-		this->update = update;
-		text = update->pluginName;
-		plugin::Plugin* p = plugin::getPlugin(update->pluginSlug);
-		if (p) {
-			rightText += "v" + p->version + " → ";
-		}
-		rightText += "v" + update->version;
+struct SyncUpdateItem : ui::MenuItem {
+	std::string slug;
+
+	void setUpdate(const std::string& slug) {
+		this->slug = slug;
+
+		auto it = library::updateInfos.find(slug);
+		if (it == library::updateInfos.end())
+			return;
+		library::UpdateInfo update = it->second;
+
+		text = update.name;
 	}
 
 	ui::Menu* createChildMenu() override {
-		if (update->changelogUrl != "") {
-			ui::Menu* menu = new ui::Menu;
+		auto it = library::updateInfos.find(slug);
+		if (it == library::updateInfos.end())
+			return NULL;
+		library::UpdateInfo update = it->second;
 
-			UrlItem* changelogUrl = new UrlItem;
-			changelogUrl->text = "Changelog";
-			changelogUrl->url = update->changelogUrl;
-			menu->addChild(changelogUrl);
+		if (update.changelogUrl == "")
+			return NULL;
 
-			return menu;
-		}
-		return NULL;
+		ui::Menu* menu = new ui::Menu;
+
+		std::string changelogUrl = update.changelogUrl;
+		menu->addChild(createMenuItem("Changelog", "", [=]() {
+			system::openBrowser(changelogUrl);
+		}));
+
+		return menu;
 	}
 
 	void step() override {
-		disabled = plugin::isSyncing();
-		if (update->progress >= 1) {
-			rightText = CHECKMARK_STRING;
-			disabled = true;
+		disabled = library::isSyncing;
+
+		auto it = library::updateInfos.find(slug);
+		if (it != library::updateInfos.end()) {
+			library::UpdateInfo update = it->second;
+
+			if (update.downloaded) {
+				rightText = CHECKMARK_STRING;
+				disabled = true;
+			}
+			else if (slug == library::updateSlug) {
+				rightText = string::f("%.0f%%", library::updateProgress * 100.f);
+			}
+			else {
+				rightText = "";
+				plugin::Plugin* p = plugin::getPlugin(slug);
+				if (p) {
+					rightText += "v" + p->version + " → ";
+				}
+				rightText += "v" + update.version;
+			}
 		}
-		else if (update->progress > 0) {
-			rightText = string::f("%.0f%%", update->progress * 100.f);
-		}
+
 		MenuItem::step();
 	}
 
-	void onAction(const event::Action& e) override {
-		std::thread t([ = ] {
-			plugin::syncUpdate(update);
+	void onAction(const ActionEvent& e) override {
+		std::thread t([=] {
+			library::syncUpdate(slug);
 		});
 		t.detach();
-		e.consume(NULL);
+		e.unconsume();
 	}
 };
 
-struct LogOutItem : ui::MenuItem {
-	void onAction(const event::Action& e) override {
-		plugin::logOut();
-	}
-};
 
 struct LibraryMenu : ui::Menu {
 	bool loggedIn = false;
@@ -668,7 +690,7 @@ struct LibraryMenu : ui::Menu {
 
 	void step() override {
 		// Refresh menu when appropriate
-		if (!loggedIn && plugin::isLoggedIn())
+		if (!loggedIn && library::isLoggedIn())
 			refresh();
 		Menu::step();
 	}
@@ -680,13 +702,12 @@ struct LibraryMenu : ui::Menu {
 		if (settings::devMode) {
 			addChild(createMenuLabel("Disabled in development mode"));
 		}
-		else if (!plugin::isLoggedIn()) {
-			UrlItem* registerItem = new UrlItem;
-			registerItem->text = "Register VCV account";
-			registerItem->url = "https://vcvrack.com/";
-			addChild(registerItem);
+		else if (!library::isLoggedIn()) {
+			addChild(createMenuItem("Register VCV account", "", [=]() {
+				system::openBrowser("https://vcvrack.com/login");
+			}));
 
-			AccountEmailField* emailField = new AccountEmailField;
+			ui::TextField* emailField = new ui::TextField;
 			emailField->placeholder = "Email";
 			emailField->box.size.x = 240.0;
 			addChild(emailField);
@@ -694,7 +715,8 @@ struct LibraryMenu : ui::Menu {
 			AccountPasswordField* passwordField = new AccountPasswordField;
 			passwordField->placeholder = "Password";
 			passwordField->box.size.x = 240.0;
-			emailField->passwordField = passwordField;
+			passwordField->nextField = emailField;
+			emailField->nextField = passwordField;
 			addChild(passwordField);
 
 			LogInItem* logInItem = new LogInItem;
@@ -706,31 +728,43 @@ struct LibraryMenu : ui::Menu {
 		else {
 			loggedIn = true;
 
-			UrlItem* manageItem = new UrlItem;
-			manageItem->text = "Manage plugins";
-			manageItem->url = "https://vcvrack.com/plugins.html";
-			addChild(manageItem);
+			addChild(createMenuItem("Log out", "", [=]() {
+				library::logOut();
+			}));
 
-			LogOutItem* logOutItem = new LogOutItem;
-			logOutItem->text = "Log out";
-			addChild(logOutItem);
+			addChild(createMenuItem("Browse VCV Library", "", [=]() {
+				system::openBrowser("https://library.vcvrack.com/");
+			}));
 
-			SyncItem* syncItem = new SyncItem;
+			SyncUpdatesItem* syncItem = new SyncUpdatesItem;
 			syncItem->text = "Update all";
 			addChild(syncItem);
 
-			if (plugin::hasUpdates()) {
-				addChild(new ui::MenuEntry);
+			if (!library::updateInfos.empty()) {
+				addChild(new ui::MenuSeparator);
 
 				ui::MenuLabel* updatesLabel = new ui::MenuLabel;
 				updatesLabel->text = "Updates";
 				addChild(updatesLabel);
 
-				for (plugin::Update& update : plugin::updates) {
-					PluginSyncItem* updateItem = new PluginSyncItem;
-					updateItem->setUpdate(&update);
+				for (auto& pair : library::updateInfos) {
+					SyncUpdateItem* updateItem = new SyncUpdateItem;
+					updateItem->setUpdate(pair.first);
 					addChild(updateItem);
 				}
+			}
+			else if (!settings::autoCheckUpdates) {
+				struct CheckUpdatesItem : ui::MenuItem {
+					void onAction(const ActionEvent& e) override {
+						std::thread t([&] {
+							library::checkUpdates();
+						});
+						t.detach();
+					}
+				};
+				CheckUpdatesItem* checkUpdatesItem = new CheckUpdatesItem;
+				checkUpdatesItem->text = "Check for updates";
+				addChild(checkUpdatesItem);
 			}
 		}
 	}
@@ -745,19 +779,19 @@ struct LibraryButton : MenuButton {
 		addChild(notification);
 	}
 
-	void onAction(const event::Action& e) override {
+	void onAction(const ActionEvent& e) override {
 		ui::Menu* menu = createMenu<LibraryMenu>();
+		menu->cornerFlags = BND_CORNER_TOP;
 		menu->box.pos = getAbsoluteOffset(math::Vec(0, box.size.y));
-		menu->box.size.x = box.size.x;
 	}
 
 	void step() override {
 		notification->box.pos = math::Vec(0, 0);
-		notification->visible = plugin::hasUpdates();
+		notification->visible = library::hasUpdates();
 
 		// Popup when updates finish downloading
-		if (plugin::restartRequested) {
-			plugin::restartRequested = false;
+		if (library::restartRequested) {
+			library::restartRequested = false;
 			if (osdialog_message(OSDIALOG_INFO, OSDIALOG_OK_CANCEL, "All plugins have been downloaded. Close and re-launch Rack to load new updates.")) {
 				APP->window->close();
 			}
@@ -767,37 +801,10 @@ struct LibraryButton : MenuButton {
 	}
 };
 
+
 ////////////////////
 // Help
 ////////////////////
-
-struct UpdateItem : ui::MenuItem {
-	ui::Menu* createChildMenu() override {
-		ui::Menu* menu = new ui::Menu;
-
-		UrlItem* changelogUrl = new UrlItem;
-		changelogUrl->text = "Changelog";
-		changelogUrl->url = updater::changelogUrl;
-		menu->addChild(changelogUrl);
-
-		return menu;
-	}
-
-	void step() override {
-		if (updater::progress > 0) {
-			rightText = string::f("%.0f%%", updater::progress * 100.f);
-		}
-		MenuItem::step();
-	}
-
-	void onAction(const event::Action& e) override {
-		std::thread t([ = ] {
-			updater::update();
-		});
-		t.detach();
-		e.consume(NULL);
-	}
-};
 
 
 struct HelpButton : MenuButton {
@@ -808,89 +815,172 @@ struct HelpButton : MenuButton {
 		addChild(notification);
 	}
 
-	void onAction(const event::Action& e) override {
+	void onAction(const ActionEvent& e) override {
 		ui::Menu* menu = createMenu();
+		menu->cornerFlags = BND_CORNER_TOP;
 		menu->box.pos = getAbsoluteOffset(math::Vec(0, box.size.y));
-		menu->box.size.x = box.size.x;
 
-		if (updater::isUpdateAvailable()) {
-			UpdateItem* updateItem = new UpdateItem;
-			updateItem->text = "Update " + APP_NAME;
-			updateItem->rightText = APP_VERSION + " → " + updater::version;
-			menu->addChild(updateItem);
+		menu->addChild(createMenuItem("Tips", "", [=]() {
+			APP->scene->addChild(tipWindowCreate());
+		}));
+
+		menu->addChild(createMenuItem("User manual", "F1", [=]() {
+			system::openBrowser("https://vcvrack.com/manual/");
+		}));
+
+		menu->addChild(createMenuItem("VCVRack.com", "", [=]() {
+			system::openBrowser("https://vcvrack.com/");
+		}));
+
+		menu->addChild(createMenuItem("Open user folder", "", [=]() {
+			system::openDirectory(asset::user(""));
+		}));
+
+		if (library::isAppUpdateAvailable()) {
+			menu->addChild(new ui::MenuSeparator);
+
+			menu->addChild(createMenuItem("Update " + APP_NAME, APP_VERSION + " → " + library::appVersion, [=]() {
+				system::openBrowser(library::appDownloadUrl);
+				APP->window->close();
+			}));
+
+			menu->addChild(createMenuItem("Review changelog", "", [=]() {
+				system::openBrowser(library::appChangelogUrl);
+			}));
+		}
+		else if (!settings::autoCheckUpdates && !settings::devMode) {
+			menu->addChild(createMenuItem("Check for " + APP_NAME + " update", "", [=]() {
+				std::thread t([&]() {
+					library::checkAppUpdate();
+				});
+				t.detach();
+			}, false, true));
 		}
 
-		UrlItem* manualItem = new UrlItem;
-		manualItem->text = "Manual";
-		manualItem->rightText = "F1";
-		manualItem->url = "https://vcvrack.com/manual/";
-		menu->addChild(manualItem);
+		menu->addChild(new ui::MenuSeparator);
 
-		UrlItem* websiteItem = new UrlItem;
-		websiteItem->text = "VCVRack.com";
-		websiteItem->url = "https://vcvrack.com/";
-		menu->addChild(websiteItem);
+		menu->addChild(createMenuLabel(APP_EDITION_NAME));
 
-		FolderItem* folderItem = new FolderItem;
-		folderItem->text = "Open user folder";
-		folderItem->path = asset::user("");
-		menu->addChild(folderItem);
+		menu->addChild(createMenuLabel(APP_VERSION));
 	}
 
 	void step() override {
 		notification->box.pos = math::Vec(0, 0);
-		notification->visible = updater::isUpdateAvailable();
+		notification->visible = library::isAppUpdateAvailable();
 		MenuButton::step();
 	}
 };
+
 
 ////////////////////
 // MenuBar
 ////////////////////
 
-void MenuBar::draw(const DrawArgs& args) {
-	bndMenuBackground(args.vg, 0.0, 0.0, box.size.x, box.size.y, BND_CORNER_ALL);
-	bndBevel(args.vg, 0.0, 0.0, box.size.x, box.size.y);
 
-	Widget::draw(args);
-}
+struct MeterLabel : ui::Label {
+	int frameIndex = 0;
+	double frameDurationTotal = 0.0;
+	double frameDurationAvg = 0.0;
+	double uiLastTime = 0.0;
+	double uiLastThreadTime = 0.0;
+	double uiFrac = 0.0;
+
+	void step() override {
+		// Compute frame rate
+		double frameDuration = APP->window->getLastFrameDuration();
+		frameDurationTotal += frameDuration;
+		frameIndex++;
+		if (frameDurationTotal >= 1.0) {
+			frameDurationAvg = frameDurationTotal / frameIndex;
+			frameDurationTotal = 0.0;
+			frameIndex = 0;
+		}
+
+		// Compute UI thread CPU
+		// double time = system::getTime();
+		// double uiDuration = time - uiLastTime;
+		// if (uiDuration >= 1.0) {
+		// 	double threadTime = system::getThreadTime();
+		// 	uiFrac = (threadTime - uiLastThreadTime) / uiDuration;
+		// 	uiLastThreadTime = threadTime;
+		// 	uiLastTime = time;
+		// }
+
+		double meterAverage = APP->engine->getMeterAverage();
+		double meterMax = APP->engine->getMeterMax();
+		text = string::f("%.1f fps  %.1f%% avg  %.1f%% max", 1.0 / frameDurationAvg, meterAverage * 100, meterMax * 100);
+		Label::step();
+	}
+};
 
 
-MenuBar* createMenuBar() {
-	MenuBar* menuBar = new MenuBar;
+struct MenuBar : widget::OpaqueWidget {
+	MeterLabel* meterLabel;
 
-	const float margin = 5;
-	menuBar->box.size.y = BND_WIDGET_HEIGHT + 2 * margin;
+	MenuBar() {
+		const float margin = 5;
+		box.size.y = BND_WIDGET_HEIGHT + 2 * margin;
 
-	ui::SequentialLayout* layout = new ui::SequentialLayout;
-	layout->box.pos = math::Vec(margin, margin);
-	layout->spacing = math::Vec(0, 0);
-	menuBar->addChild(layout);
+		ui::SequentialLayout* layout = new ui::SequentialLayout;
+		layout->margin = math::Vec(margin, margin);
+		layout->spacing = math::Vec(0, 0);
+		addChild(layout);
 
-	FileButton* fileButton = new FileButton;
-	fileButton->text = "File";
-	layout->addChild(fileButton);
+		FileButton* fileButton = new FileButton;
+		fileButton->text = "File";
+		layout->addChild(fileButton);
 
-	EditButton* editButton = new EditButton;
-	editButton->text = "Edit";
-	layout->addChild(editButton);
+		EditButton* editButton = new EditButton;
+		editButton->text = "Edit";
+		layout->addChild(editButton);
 
-	ViewButton* viewButton = new ViewButton;
-	viewButton->text = "View";
-	layout->addChild(viewButton);
+		ViewButton* viewButton = new ViewButton;
+		viewButton->text = "View";
+		layout->addChild(viewButton);
 
-	EngineButton* engineButton = new EngineButton;
-	engineButton->text = "Engine";
-	layout->addChild(engineButton);
+		EngineButton* engineButton = new EngineButton;
+		engineButton->text = "Engine";
+		layout->addChild(engineButton);
 
-	LibraryButton* libraryButton = new LibraryButton;
-	libraryButton->text = "Library";
-	layout->addChild(libraryButton);
+		LibraryButton* libraryButton = new LibraryButton;
+		libraryButton->text = "Library";
+		layout->addChild(libraryButton);
 
-	HelpButton* helpButton = new HelpButton;
-	helpButton->text = "Help";
-	layout->addChild(helpButton);
+		HelpButton* helpButton = new HelpButton;
+		helpButton->text = "Help";
+		layout->addChild(helpButton);
 
+		// ui::Label* titleLabel = new ui::Label;
+		// titleLabel->color.a = 0.5;
+		// layout->addChild(titleLabel);
+
+		meterLabel = new MeterLabel;
+		meterLabel->box.pos.y = margin;
+		meterLabel->box.size.x = 300;
+		meterLabel->alignment = ui::Label::RIGHT_ALIGNMENT;
+		meterLabel->color.a = 0.5;
+		addChild(meterLabel);
+	}
+
+	void draw(const DrawArgs& args) override {
+		bndMenuBackground(args.vg, 0.0, 0.0, box.size.x, box.size.y, BND_CORNER_ALL);
+		bndBevel(args.vg, 0.0, 0.0, box.size.x, box.size.y);
+
+		Widget::draw(args);
+	}
+
+	void step() override {
+		meterLabel->box.pos.x = box.size.x - meterLabel->box.size.x - 5;
+		Widget::step();
+	}
+};
+
+
+} // namespace menuBar
+
+
+widget::Widget* createMenuBar() {
+	menuBar::MenuBar* menuBar = new menuBar::MenuBar;
 	return menuBar;
 }
 

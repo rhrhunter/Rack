@@ -90,6 +90,7 @@ SOURCES += $(wildcard src/*.cpp)
 # The compiled plugin and "plugin.json" are automatically added.
 DISTRIBUTABLES += res
 DISTRIBUTABLES += $(wildcard LICENSE*)
+DISTRIBUTABLES += $(wildcard presets)
 
 # Include the Rack plugin Makefile framework
 include $(RACK_DIR)/plugin.mk
@@ -182,6 +183,7 @@ def create_manifest(slug, plugin_dir="."):
 	# Dump JSON
 	with open(manifest_filename, "w") as f:
 		json.dump(manifest, f, indent="  ")
+	print("")
 	print(f"Manifest written to {manifest_filename}")
 
 
@@ -226,17 +228,14 @@ def create_module(slug, panel_filename=None, source_filename=None):
 		if not os.path.exists(panel_filename):
 			raise UserException(f"Panel not found at {panel_filename}.")
 
-		print(f"Panel found at {panel_filename}. Generating source file.")
-
 		if os.path.exists(source_filename):
-			if input_default(f"{source_filename} already exists. Overwrite?", "n").lower() != "y":
+			if input_default(f"{source_filename} already exists. Overwrite? (y/n)", "n").lower() != "y":
 				return
 
 		# Read SVG XML
 		tree = xml.etree.ElementTree.parse(panel_filename)
 
 		components = panel_to_components(tree)
-		print(f"Components extracted from {panel_filename}")
 
 		# Write source
 		source = components_to_source(components, slug)
@@ -251,9 +250,13 @@ def create_module(slug, panel_filename=None, source_filename=None):
 		# Tell user to add model to plugin.hpp and plugin.cpp
 		print(f"""
 To enable the module, add
-extern Model* model{identifier};
+
+	extern Model* model{identifier};
+
 to plugin.hpp, and add
-p->addModel(model{identifier});
+
+	p->addModel(model{identifier});
+
 to the init() function in plugin.cpp.""")
 
 
@@ -263,19 +266,22 @@ def panel_to_components(tree):
 		"inkscape": "http://www.inkscape.org/namespaces/inkscape",
 	}
 
-	# Get components layer
 	root = tree.getroot()
-	groups = root.findall(".//svg:g[@inkscape:label='components']", ns)
-	# Illustrator uses `id` for the group name.
-	if len(groups) < 1:
-		groups = root.findall(".//svg:g[@id='components']", ns)
-	if len(groups) < 1:
-		raise UserException("Could not find \"components\" layer on panel")
+	# Get SVG scale
+	root_width = root.get('width')
+	svg_dpi = 75
+	scale = 1
+	if re.match('\d+px', root_width):
+		scale = 25.4 / svg_dpi
 
-	# Get circles and rects
-	components_group = groups[0]
-	circles = components_group.findall(".//svg:circle", ns)
-	rects = components_group.findall(".//svg:rect", ns)
+	# Get components layer
+	group = root.find(".//svg:g[@inkscape:label='components']", ns)
+	# Illustrator uses `id` for the group name.
+	# Don't test with `not group` since Elements with no subelements are falsy.
+	if group is None:
+		group = root.find(".//svg:g[@id='components']", ns)
+	if group is None:
+		raise UserException("Could not find \"components\" layer on panel")
 
 	components = {}
 	components['params'] = []
@@ -284,38 +290,51 @@ def panel_to_components(tree):
 	components['lights'] = []
 	components['widgets'] = []
 
-	for el in circles + rects:
+	for el in group:
 		c = {}
+
 		# Get name
-		name = el.get('{http://www.inkscape.org/namespaces/inkscape}label')
-		if name is None:
+		name = el.get('{' + ns['inkscape'] + '}label')
+		if not name:
 			name = el.get('id')
+		if not name:
+			name = ""
 		name = str_to_identifier(name).upper()
 		c['name'] = name
 
-		# Get color
-		style = el.get('style')
-		color_match = re.search(r'fill:\S*#(.{6});', style)
-		color = color_match.group(1).lower()
-		c['color'] = color
-
 		# Get position
-		if el.tag == "{http://www.w3.org/2000/svg}rect":
-			x = float(el.get('x'))
-			y = float(el.get('y'))
-			width = float(el.get('width'))
-			height = float(el.get('height'))
+		if el.tag == '{' + ns['svg'] + '}rect':
+			x = float(el.get('x')) * scale
+			y = float(el.get('y')) * scale
+			width = float(el.get('width')) * scale
+			height = float(el.get('height')) * scale
 			c['x'] = round(x, 3)
 			c['y'] = round(y, 3)
 			c['width'] = round(width, 3)
 			c['height'] = round(height, 3)
 			c['cx'] = round(x + width / 2, 3)
 			c['cy'] = round(y + height / 2, 3)
-		elif el.tag == "{http://www.w3.org/2000/svg}circle":
-			cx = float(el.get('cx'))
-			cy = float(el.get('cy'))
+		elif el.tag == '{' + ns['svg'] + '}circle' or el.tag == '{' + ns['svg'] + '}ellipse':
+			cx = float(el.get('cx')) * scale
+			cy = float(el.get('cy')) * scale
 			c['cx'] = round(cx, 3)
 			c['cy'] = round(cy, 3)
+		else:
+			print(f"Element in components layer is not rect, circle, or ellipse: {el}")
+			continue
+
+		# Get color
+		fill = el.get('fill')
+		style = el.get('style')
+		if fill:
+			color_match = re.search(r'#(.{6})', fill)
+			color = color_match.group(1).lower()
+		elif style:
+			color_match = re.search(r'fill:\S*#(.{6});', style)
+			color = color_match.group(1).lower()
+		else:
+			print(f"Cannot get color of component: {el}")
+			continue
 
 		if color == 'ff0000':
 			components['params'].append(c)
@@ -329,14 +348,14 @@ def panel_to_components(tree):
 			components['widgets'].append(c)
 
 	# Sort components
-	top_left_sort = lambda w: (w['cy'], w['cx'])
+	top_left_sort = lambda w: w['cy'] + 0.01 * w['cx']
 	components['params'] = sorted(components['params'], key=top_left_sort)
 	components['inputs'] = sorted(components['inputs'], key=top_left_sort)
 	components['outputs'] = sorted(components['outputs'], key=top_left_sort)
 	components['lights'] = sorted(components['lights'], key=top_left_sort)
 	components['widgets'] = sorted(components['widgets'], key=top_left_sort)
 
-	print(f"Found {len(components['params'])} params, {len(components['inputs'])} inputs, {len(components['outputs'])} outputs, {len(components['lights'])} lights, and {len(components['widgets'])} custom widgets.")
+	print(f"Found {len(components['params'])} params, {len(components['inputs'])} inputs, {len(components['outputs'])} outputs, {len(components['lights'])} lights, and {len(components['widgets'])} custom widgets in \"components\" layer.")
 	return components
 
 
@@ -351,53 +370,61 @@ struct {identifier} : Module {{"""
 
 	# Params
 	source += """
-	enum ParamIds {"""
+	enum ParamId {"""
 	for c in components['params']:
 		source += f"""
 		{c['name']}_PARAM,"""
 	source += """
-		NUM_PARAMS
+		PARAMS_LEN
 	};"""
 
 	# Inputs
 	source += """
-	enum InputIds {"""
+	enum InputId {"""
 	for c in components['inputs']:
 		source += f"""
 		{c['name']}_INPUT,"""
 	source += """
-		NUM_INPUTS
+		INPUTS_LEN
 	};"""
 
 	# Outputs
 	source += """
-	enum OutputIds {"""
+	enum OutputId {"""
 	for c in components['outputs']:
 		source += f"""
 		{c['name']}_OUTPUT,"""
 	source += """
-		NUM_OUTPUTS
+		OUTPUTS_LEN
 	};"""
 
 	# Lights
 	source += """
-	enum LightIds {"""
+	enum LightId {"""
 	for c in components['lights']:
 		source += f"""
 		{c['name']}_LIGHT,"""
 	source += """
-		NUM_LIGHTS
+		LIGHTS_LEN
 	};"""
 
 
 	source += f"""
 
 	{identifier}() {{
-		config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);"""
+		config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);"""
 
 	for c in components['params']:
 		source += f"""
 		configParam({c['name']}_PARAM, 0.f, 1.f, 0.f, "");"""
+
+	for c in components['inputs']:
+		source += f"""
+		configInput({c['name']}_INPUT, "");"""
+
+	for c in components['outputs']:
+		source += f"""
+		configOutput({c['name']}_OUTPUT, "");"""
 
 	source += """
 	}
@@ -412,7 +439,7 @@ struct {identifier} : Module {{"""
 struct {identifier}Widget : ModuleWidget {{
 	{identifier}Widget({identifier}* module) {{
 		setModule(module);
-		setPanel(APP->window->loadSvg(asset::plugin(pluginInstance, "res/{slug}.svg")));
+		setPanel(createPanel(asset::plugin(pluginInstance, "res/{slug}.svg")));
 
 		addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));
 		addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, 0)));
@@ -487,7 +514,7 @@ Model* model{identifier} = createModel<{identifier}, {identifier}Widget>("{slug}
 
 
 def usage(script):
-	text = f"""VCV Rack Plugin Helper Utility
+	text = f"""VCV Rack Plugin Development Helper
 
 Usage: {script} <command> ...
 Commands:

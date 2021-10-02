@@ -1,9 +1,34 @@
 #include "plugin.hpp"
-#include <app.hpp>
+#include <context.hpp>
 
 
 namespace rack {
 namespace core {
+
+
+struct BlankModule : Module {
+	int width = 10;
+
+	/** Legacy for <=v1 patches */
+	void fromJson(json_t* rootJ) override {
+		Module::fromJson(rootJ);
+		json_t* widthJ = json_object_get(rootJ, "width");
+		if (widthJ)
+			width = std::round(json_number_value(widthJ) / RACK_GRID_WIDTH);
+	}
+
+	json_t* dataToJson() override {
+		json_t* rootJ = json_object();
+		json_object_set_new(rootJ, "width", json_integer(width));
+		return rootJ;
+	}
+
+	void dataFromJson(json_t* rootJ) override {
+		json_t* widthJ = json_object_get(rootJ, "width");
+		if (widthJ)
+			width = json_integer_value(widthJ);
+	}
+};
 
 
 struct BlankPanel : Widget {
@@ -33,26 +58,27 @@ struct ModuleResizeHandle : OpaqueWidget {
 	bool right = false;
 	Vec dragPos;
 	Rect originalBox;
+	BlankModule* module;
 
 	ModuleResizeHandle() {
 		box.size = Vec(RACK_GRID_WIDTH * 1, RACK_GRID_HEIGHT);
 	}
 
-	void onDragStart(const event::DragStart& e) override {
+	void onDragStart(const DragStartEvent& e) override {
 		if (e.button != GLFW_MOUSE_BUTTON_LEFT)
 			return;
 
-		dragPos = APP->scene->rack->mousePos;
+		dragPos = APP->scene->rack->getMousePos();
 		ModuleWidget* mw = getAncestorOfType<ModuleWidget>();
 		assert(mw);
 		originalBox = mw->box;
 	}
 
-	void onDragMove(const event::DragMove& e) override {
+	void onDragMove(const DragMoveEvent& e) override {
 		ModuleWidget* mw = getAncestorOfType<ModuleWidget>();
 		assert(mw);
 
-		Vec newDragPos = APP->scene->rack->mousePos;
+		Vec newDragPos = APP->scene->rack->getMousePos();
 		float deltaX = newDragPos.x - dragPos.x;
 
 		Rect newBox = originalBox;
@@ -75,6 +101,7 @@ struct ModuleResizeHandle : OpaqueWidget {
 		if (!APP->scene->rack->requestModulePos(mw, newBox.pos)) {
 			mw->box = oldBox;
 		}
+		module->width = std::round(mw->box.size.x / RACK_GRID_WIDTH);
 	}
 
 	void draw(const DrawArgs& args) override {
@@ -97,7 +124,7 @@ struct BlankWidget : ModuleWidget {
 	Widget* rightHandle;
 	BlankPanel* blankPanel;
 
-	BlankWidget(Module* module) {
+	BlankWidget(BlankModule* module) {
 		setModule(module);
 		box.size = Vec(RACK_GRID_WIDTH * 10, RACK_GRID_HEIGHT);
 
@@ -105,10 +132,13 @@ struct BlankWidget : ModuleWidget {
 		addChild(blankPanel);
 
 		ModuleResizeHandle* leftHandle = new ModuleResizeHandle;
+		leftHandle->module = module;
+		addChild(leftHandle);
+
 		ModuleResizeHandle* rightHandle = new ModuleResizeHandle;
 		rightHandle->right = true;
 		this->rightHandle = rightHandle;
-		addChild(leftHandle);
+		rightHandle->module = module;
 		addChild(rightHandle);
 
 		addChild(createWidget<ScrewSilver>(Vec(15, 0)));
@@ -120,6 +150,11 @@ struct BlankWidget : ModuleWidget {
 	}
 
 	void step() override {
+		BlankModule* module = dynamic_cast<BlankModule*>(this->module);
+		if (module) {
+			box.size.x = module->width * RACK_GRID_WIDTH;
+		}
+
 		blankPanel->box.size = box.size;
 		topRightScrew->box.pos.x = box.size.x - 30;
 		bottomRightScrew->box.pos.x = box.size.x - 30;
@@ -132,28 +167,10 @@ struct BlankWidget : ModuleWidget {
 		rightHandle->box.pos.x = box.size.x - rightHandle->box.size.x;
 		ModuleWidget::step();
 	}
-
-	json_t* toJson() override {
-		json_t* rootJ = ModuleWidget::toJson();
-
-		// width
-		json_object_set_new(rootJ, "width", json_real(box.size.x));
-
-		return rootJ;
-	}
-
-	void fromJson(json_t* rootJ) override {
-		ModuleWidget::fromJson(rootJ);
-
-		// width
-		json_t* widthJ = json_object_get(rootJ, "width");
-		if (widthJ)
-			box.size.x = json_number_value(widthJ);
-	}
 };
 
 
-Model* modelBlank = createModel<Module, BlankWidget>("Blank");
+Model* modelBlank = createModel<BlankModule, BlankWidget>("Blank");
 
 
 } // namespace core

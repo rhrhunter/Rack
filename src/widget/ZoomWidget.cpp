@@ -5,9 +5,17 @@ namespace rack {
 namespace widget {
 
 
-math::Vec ZoomWidget::getRelativeOffset(math::Vec v, Widget* relative) {
-	return Widget::getRelativeOffset(v.mult(zoom), relative);
+math::Vec ZoomWidget::getRelativeOffset(math::Vec v, Widget* ancestor) {
+	// Transform `v` (which is in child coordinates) to local coordinates.
+	v = v.mult(zoom);
+	return Widget::getRelativeOffset(v, ancestor);
 }
+
+
+float ZoomWidget::getRelativeZoom(Widget* ancestor) {
+	return zoom * Widget::getRelativeZoom(ancestor);
+}
+
 
 math::Rect ZoomWidget::getViewport(math::Rect r) {
 	r.pos = r.pos.mult(zoom);
@@ -18,16 +26,19 @@ math::Rect ZoomWidget::getViewport(math::Rect r) {
 	return r;
 }
 
+
 void ZoomWidget::setZoom(float zoom) {
 	if (zoom == this->zoom)
 		return;
 	this->zoom = zoom;
 
-	event::Context cZoom;
-	event::Zoom eZoom;
-	eZoom.context = &cZoom;
-	Widget::onZoom(eZoom);
+	// Dispatch Dirty event
+	widget::EventContext cDirty;
+	DirtyEvent eDirty;
+	eDirty.context = &cDirty;
+	Widget::onDirty(eDirty);
 }
+
 
 void ZoomWidget::draw(const DrawArgs& args) {
 	DrawArgs zoomCtx = args;

@@ -1,7 +1,9 @@
 #pragma once
 #include <common.hpp>
+
 #include <jansson.h>
-#include <vector>
+
+#include <list>
 
 
 namespace rack {
@@ -13,11 +15,15 @@ struct Model;
 
 // Subclass this and return a pointer to a new one when init() is called
 struct Plugin {
-	/** A list of the models available by this plugin, add with addModel() */
-	std::vector<Model*> models;
-	/** The file path to the plugin's directory */
+	/** List of models contained in this plugin.
+	Add with addModel().
+	*/
+	std::list<Model*> models;
+	/** The file path to the plugin's directory.
+	*/
 	std::string path;
-	/** OS-dependent library handle */
+	/** OS-dependent library handle.
+	*/
 	void* handle = NULL;
 
 	/** Must be unique. Used for saving patches. Never change this after releasing your plugin.
@@ -37,6 +43,10 @@ struct Plugin {
 	If blank, `name` is used.
 	*/
 	std::string brand;
+	/** A one-line summary of the plugin's purpose.
+	If your plugin doesn't follow a theme, it’s probably best to omit this.
+	*/
+	std::string description;
 	/** Your name, company, alias, or GitHub username.
 	*/
 	std::string author;
@@ -58,14 +68,18 @@ struct Plugin {
 	/** Link to donation page for users who wish to donate. E.g. PayPal URL.
 	*/
 	std::string donateUrl;
+	/** Link to the changelog of the plugin.
+	*/
+	std::string changelogUrl;
 	/** Last modified timestamp of the plugin directory.
 	*/
 	double modifiedTimestamp = -INFINITY;
 
 	~Plugin();
 	void addModel(Model* model);
-	Model* getModel(std::string slug);
+	Model* getModel(const std::string& slug);
 	void fromJson(json_t* rootJ);
+	std::string getBrand();
 };
 
 

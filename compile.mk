@@ -26,14 +26,13 @@ endif
 ifdef ARCH_MAC
 	FLAGS += -DARCH_MAC
 	CXXFLAGS += -stdlib=libc++
-	LDFLAGS += -stdlib=libc++
-	MAC_SDK_FLAGS = -mmacosx-version-min=10.7
+	MAC_SDK_FLAGS := -mmacosx-version-min=10.9
 	FLAGS += $(MAC_SDK_FLAGS)
-	LDFLAGS += $(MAC_SDK_FLAGS)
 endif
 ifdef ARCH_WIN
 	FLAGS += -DARCH_WIN
 	FLAGS += -D_USE_MATH_DEFINES
+	FLAGS += -municode
 	CXXFLAGS += -Wsuggest-override
 endif
 
@@ -88,3 +87,6 @@ ifdef ARCH_MAC
 	@# Apple makes this needlessly complicated, so just generate a C file with an array.
 	xxd -i $< | $(CC) $(MAC_SDK_FLAGS) -c -o $@ -xc -
 endif
+
+build/%.html: %.md
+	markdown $< > $@

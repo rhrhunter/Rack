@@ -1,7 +1,7 @@
 #pragma once
 #include <widget/OpaqueWidget.hpp>
 #include <ui/common.hpp>
-#include <app.hpp>
+#include <context.hpp>
 
 
 namespace rack {
@@ -19,20 +19,32 @@ struct TextField : widget::OpaqueWidget {
 	*/
 	int selection = 0;
 
+	/** For Tab and Shift-Tab focusing.
+	*/
+	Widget* prevField = NULL;
+	Widget* nextField = NULL;
+
 	TextField();
 	void draw(const DrawArgs& args) override;
-	void onDragHover(const event::DragHover& e) override;
-	void onButton(const event::Button& e) override;
-	void onSelectText(const event::SelectText& e) override;
-	void onSelectKey(const event::SelectKey& e) override;
+	void onDragHover(const DragHoverEvent& e) override;
+	void onButton(const ButtonEvent& e) override;
+	void onSelectText(const SelectTextEvent& e) override;
+	void onSelectKey(const SelectKeyEvent& e) override;
+	virtual int getTextPosition(math::Vec mousePos);
 
-	/** Inserts text at the cursor, replacing the selection if necessary */
-	void insertText(std::string text);
-
+	std::string getText();
 	/** Replaces the entire text */
 	void setText(std::string text);
 	void selectAll();
-	virtual int getTextPosition(math::Vec mousePos);
+	std::string getSelectedText();
+	/** Inserts text at the cursor, replacing the selection if necessary */
+	void insertText(std::string text);
+	void copyClipboard();
+	void cutClipboard();
+	void pasteClipboard();
+	void cursorToPrevWord();
+	void cursorToNextWord();
+	void createContextMenu();
 };
 
 
