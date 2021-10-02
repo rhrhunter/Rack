@@ -17,7 +17,7 @@ SvgSwitch::SvgSwitch() {
 	fb->addChild(sw);
 }
 
-void SvgSwitch::addFrame(std::shared_ptr<Svg> svg) {
+void SvgSwitch::addFrame(std::shared_ptr<window::Svg> svg) {
 	frames.push_back(svg);
 	// If this is our first frame, automatically set SVG and size
 	if (!sw->svg) {
@@ -30,9 +30,10 @@ void SvgSwitch::addFrame(std::shared_ptr<Svg> svg) {
 	}
 }
 
-void SvgSwitch::onChange(const event::Change& e) {
-	if (!frames.empty() && paramQuantity) {
-		int index = (int) std::round(paramQuantity->getValue() - paramQuantity->getMinValue());
+void SvgSwitch::onChange(const ChangeEvent& e) {
+	engine::ParamQuantity* pq = getParamQuantity();
+	if (!frames.empty() && pq) {
+		int index = (int) std::round(pq->getValue() - pq->getMinValue());
 		index = math::clamp(index, 0, (int) frames.size() - 1);
 		sw->setSvg(frames[index]);
 		fb->dirty = true;

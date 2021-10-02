@@ -6,9 +6,6 @@ namespace rack {
 namespace ui {
 
 
-#define BND_LABEL_FONT_SIZE 13
-
-
 void MenuItem::draw(const DrawArgs& args) {
 	BNDwidgetState state = BND_DEFAULT;
 
@@ -18,9 +15,6 @@ void MenuItem::draw(const DrawArgs& args) {
 	// Set active state if this MenuItem
 	Menu* parentMenu = dynamic_cast<Menu*>(parent);
 	if (parentMenu && parentMenu->activeEntry == this)
-		state = BND_ACTIVE;
-
-	if (active)
 		state = BND_ACTIVE;
 
 	// Main text and background
@@ -44,7 +38,7 @@ void MenuItem::step() {
 	Widget::step();
 }
 
-void MenuItem::onEnter(const event::Enter& e) {
+void MenuItem::onEnter(const EnterEvent& e) {
 	Menu* parentMenu = dynamic_cast<Menu*>(parent);
 	if (!parentMenu)
 		return;
@@ -60,29 +54,33 @@ void MenuItem::onEnter(const event::Enter& e) {
 	parentMenu->setChildMenu(childMenu);
 }
 
-void MenuItem::onDragDrop(const event::DragDrop& e) {
-	if (e.origin != this)
-		return;
-	doAction();
+void MenuItem::onDragDrop(const DragDropEvent& e) {
+	if (e.origin == this && !disabled) {
+		int mods = APP->window->getMods();
+		doAction((mods & RACK_MOD_MASK) != RACK_MOD_CTRL);
+	}
 }
 
-void MenuItem::doAction() {
-	if (disabled)
-		return;
-
-	event::Context cAction;
-	event::Action eAction;
+void MenuItem::doAction(bool consume) {
+	widget::EventContext cAction;
+	ActionEvent eAction;
 	eAction.context = &cAction;
-	// Consume event by default, but allow action to un-consume it to prevent the menu from being removed.
-	eAction.consume(this);
+	if (consume) {
+		eAction.consume(this);
+	}
 	onAction(eAction);
-	if (!cAction.target)
+	if (!cAction.consumed)
 		return;
 
+	// Close menu
 	MenuOverlay* overlay = getAncestorOfType<MenuOverlay>();
 	if (overlay) {
 		overlay->requestDelete();
 	}
+}
+
+
+void MenuItem::onAction(const ActionEvent& e) {
 }
 
 

@@ -8,6 +8,7 @@ namespace core {
 struct GateMidiOutput : midi::Output {
 	int vels[128];
 	bool lastGates[128];
+	double frame = 0.0;
 
 	GateMidiOutput() {
 		reset();
@@ -18,10 +19,10 @@ struct GateMidiOutput : midi::Output {
 			vels[note] = 100;
 			lastGates[note] = false;
 		}
+		Output::reset();
 	}
 
 	void panic() {
-		reset();
 		// Send all note off commands
 		for (int note = 0; note < 128; note++) {
 			// Note off
@@ -29,7 +30,9 @@ struct GateMidiOutput : midi::Output {
 			m.setStatus(0x8);
 			m.setNote(note);
 			m.setValue(0);
+			m.setFrame(frame);
 			sendMessage(m);
+			lastGates[note] = false;
 		}
 	}
 
@@ -44,6 +47,7 @@ struct GateMidiOutput : midi::Output {
 			m.setStatus(0x9);
 			m.setNote(note);
 			m.setValue(vels[note]);
+			m.setFrame(frame);
 			sendMessage(m);
 		}
 		else if (!gate && lastGates[note]) {
@@ -52,9 +56,14 @@ struct GateMidiOutput : midi::Output {
 			m.setStatus(0x8);
 			m.setNote(note);
 			m.setValue(vels[note]);
+			m.setFrame(frame);
 			sendMessage(m);
 		}
 		lastGates[note] = gate;
+	}
+
+	void setFrame(double frame) {
+		this->frame = frame;
 	}
 };
 
@@ -81,6 +90,8 @@ struct CV_Gate : Module {
 
 	CV_Gate() {
 		config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
+		for (int i = 0; i < 16; i++)
+			configInput(GATE_INPUTS + i, string::f("Cell %d", i + 1));
 		onReset();
 	}
 
@@ -96,6 +107,8 @@ struct CV_Gate : Module {
 	}
 
 	void process(const ProcessArgs& args) override {
+		midiOutput.setFrame(args.frame);
+
 		for (int i = 0; i < 16; i++) {
 			int note = learnedNotes[i];
 			if (velocityMode) {
@@ -149,26 +162,10 @@ struct CV_Gate : Module {
 };
 
 
-struct CV_GateVelocityItem : MenuItem {
-	CV_Gate* module;
-	void onAction(const event::Action& e) override {
-		module->velocityMode ^= true;
-	}
-};
-
-
-struct CV_GatePanicItem : MenuItem {
-	CV_Gate* module;
-	void onAction(const event::Action& e) override {
-		module->midiOutput.panic();
-	}
-};
-
-
 struct CV_GateWidget : ModuleWidget {
 	CV_GateWidget(CV_Gate* module) {
 		setModule(module);
-		setPanel(APP->window->loadSvg(asset::system("res/Core/CV-Gate.svg")));
+		setPanel(Svg::load(asset::system("res/Core/CV-Gate.svg")));
 
 		addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));
 		addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, 0)));
@@ -203,15 +200,13 @@ struct CV_GateWidget : ModuleWidget {
 	void appendContextMenu(Menu* menu) override {
 		CV_Gate* module = dynamic_cast<CV_Gate*>(this->module);
 
-		menu->addChild(new MenuEntry);
-		CV_GateVelocityItem* velocityItem = createMenuItem<CV_GateVelocityItem>("Velocity mode", CHECKMARK(module->velocityMode));
-		velocityItem->module = module;
-		menu->addChild(velocityItem);
+		menu->addChild(new MenuSeparator);
 
-		CV_GatePanicItem* panicItem = new CV_GatePanicItem;
-		panicItem->text = "Panic";
-		panicItem->module = module;
-		menu->addChild(panicItem);
+		menu->addChild(createBoolPtrMenuItem("Velocity mode", &module->velocityMode));
+
+		menu->addChild(createMenuItem("Panic", "",
+			[=]() {module->midiOutput.panic();}
+		));
 	}
 };
 

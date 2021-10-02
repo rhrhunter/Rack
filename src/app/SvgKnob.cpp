@@ -20,7 +20,7 @@ SvgKnob::SvgKnob() {
 	tw->addChild(sw);
 }
 
-void SvgKnob::setSvg(std::shared_ptr<Svg> svg) {
+void SvgKnob::setSvg(std::shared_ptr<window::Svg> svg) {
 	sw->setSvg(svg);
 	tw->box.size = sw->box.size;
 	fb->box.size = sw->box.size;
@@ -31,15 +31,23 @@ void SvgKnob::setSvg(std::shared_ptr<Svg> svg) {
 	// shadow->box = shadow->box.grow(math::Vec(2, 2));
 }
 
-void SvgKnob::onChange(const event::Change& e) {
+void SvgKnob::onChange(const ChangeEvent& e) {
 	// Re-transform the widget::TransformWidget
-	if (paramQuantity) {
+	engine::ParamQuantity* pq = getParamQuantity();
+	if (pq) {
+		float value = pq->getSmoothValue();
 		float angle;
-		if (paramQuantity->isBounded()) {
-			angle = math::rescale(paramQuantity->getScaledValue(), 0.f, 1.f, minAngle, maxAngle);
+		if (!pq->isBounded()) {
+			// Number of rotations equals value for unbounded range
+			angle = value * (2 * M_PI);
+		}
+		else if (pq->getRange() == 0.f) {
+			// Center angle for zero range
+			angle = (minAngle + maxAngle) / 2.f;
 		}
 		else {
-			angle = math::rescale(paramQuantity->getValue(), -1.f, 1.f, minAngle, maxAngle);
+			// Proportional angle for finite range
+			angle = math::rescale(value, pq->getMinValue(), pq->getMaxValue(), minAngle, maxAngle);
 		}
 		angle = std::fmod(angle, 2 * M_PI);
 		tw->identity();

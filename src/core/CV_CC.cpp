@@ -7,6 +7,7 @@ namespace core {
 
 struct CCMidiOutput : midi::Output {
 	int lastValues[128];
+	double frame = 0.0;
 
 	CCMidiOutput() {
 		reset();
@@ -16,6 +17,7 @@ struct CCMidiOutput : midi::Output {
 		for (int n = 0; n < 128; n++) {
 			lastValues[n] = -1;
 		}
+		Output::reset();
 	}
 
 	void setValue(int value, int cc) {
@@ -27,7 +29,12 @@ struct CCMidiOutput : midi::Output {
 		m.setStatus(0xb);
 		m.setNote(cc);
 		m.setValue(value);
+		m.setFrame(frame);
 		sendMessage(m);
+	}
+
+	void setFrame(double frame) {
+		this->frame = frame;
 	}
 };
 
@@ -48,12 +55,14 @@ struct CV_CC : Module {
 	};
 
 	CCMidiOutput midiOutput;
-	float rateLimiterPhase = 0.f;
+	dsp::Timer rateLimiterTimer;
 	int learningId = -1;
 	int learnedCcs[16] = {};
 
 	CV_CC() {
 		config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
+		for (int i = 0; i < 16; i++)
+			configInput(CC_INPUTS + i, string::f("Cell %d", i + 1));
 		onReset();
 	}
 
@@ -67,14 +76,14 @@ struct CV_CC : Module {
 	}
 
 	void process(const ProcessArgs& args) override {
-		const float rateLimiterPeriod = 0.010f;
-		rateLimiterPhase += args.sampleTime / rateLimiterPeriod;
-		if (rateLimiterPhase >= 1.f) {
-			rateLimiterPhase -= 1.f;
-		}
-		else {
+		const float rateLimiterPeriod = 1 / 200.f;
+		bool rateLimiterTriggered = (rateLimiterTimer.process(args.sampleTime) >= rateLimiterPeriod);
+		if (rateLimiterTriggered)
+			rateLimiterTimer.time -= rateLimiterPeriod;
+		else
 			return;
-		}
+
+		midiOutput.setFrame(args.frame);
 
 		for (int i = 0; i < 16; i++) {
 			int value = (int) std::round(inputs[CC_INPUTS + i].getVoltage() / 10.f * 127);
@@ -116,7 +125,7 @@ struct CV_CC : Module {
 struct CV_CCWidget : ModuleWidget {
 	CV_CCWidget(CV_CC* module) {
 		setModule(module);
-		setPanel(APP->window->loadSvg(asset::system("res/Core/CV-CC.svg")));
+		setPanel(Svg::load(asset::system("res/Core/CV-CC.svg")));
 
 		addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));
 		addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, 0)));

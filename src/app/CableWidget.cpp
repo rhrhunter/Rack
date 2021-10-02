@@ -1,89 +1,142 @@
 #include <app/CableWidget.hpp>
+#include <widget/SvgWidget.hpp>
+#include <widget/TransformWidget.hpp>
 #include <app/Scene.hpp>
 #include <app/RackWidget.hpp>
-#include <window.hpp>
-#include <app.hpp>
-#include <patch.hpp>
+#include <app/ModuleWidget.hpp>
+#include <context.hpp>
+#include <asset.hpp>
 #include <settings.hpp>
+#include <engine/Engine.hpp>
 #include <engine/Port.hpp>
+#include <app/MultiLightWidget.hpp>
+#include <componentlibrary.hpp>
 
 
 namespace rack {
 namespace app {
 
-static void drawPlug(NVGcontext* vg, math::Vec pos, NVGcolor color) {
-	NVGcolor colorOutline = nvgLerpRGBA(color, nvgRGBf(0.0, 0.0, 0.0), 0.5);
 
-	// Plug solid
-	nvgBeginPath(vg);
-	nvgCircle(vg, pos.x, pos.y, 9);
-	nvgFillColor(vg, color);
-	nvgFill(vg);
-
-	// Border
-	nvgStrokeWidth(vg, 1.0);
-	nvgStrokeColor(vg, colorOutline);
-	nvgStroke(vg);
-
-	// Hole
-	nvgBeginPath(vg);
-	nvgCircle(vg, pos.x, pos.y, 5);
-	nvgFillColor(vg, nvgRGBf(0.0, 0.0, 0.0));
-	nvgFill(vg);
-}
-
-static void drawCable(NVGcontext* vg, math::Vec pos1, math::Vec pos2, NVGcolor color, float thickness, float tension, float opacity) {
-	NVGcolor colorShadow = nvgRGBAf(0, 0, 0, 0.10);
-	NVGcolor colorOutline = nvgLerpRGBA(color, nvgRGBf(0.0, 0.0, 0.0), 0.5);
-
-	// Cable
-	if (opacity > 0.0) {
-		nvgSave(vg);
-		// This power scaling looks more linear than actual linear scaling
-		nvgGlobalAlpha(vg, std::pow(opacity, 1.5));
-
-		float dist = pos1.minus(pos2).norm();
-		math::Vec slump;
-		slump.y = (1.0 - tension) * (150.0 + 1.0 * dist);
-		math::Vec pos3 = pos1.plus(pos2).div(2).plus(slump);
-
-		// Adjust pos1 and pos2 to not draw over the plug
-		pos1 = pos1.plus(pos3.minus(pos1).normalize().mult(9));
-		pos2 = pos2.plus(pos3.minus(pos2).normalize().mult(9));
-
-		nvgLineJoin(vg, NVG_ROUND);
-
-		// Shadow
-		math::Vec pos4 = pos3.plus(slump.mult(0.08));
-		nvgBeginPath(vg);
-		nvgMoveTo(vg, pos1.x, pos1.y);
-		nvgQuadTo(vg, pos4.x, pos4.y, pos2.x, pos2.y);
-		nvgStrokeColor(vg, colorShadow);
-		nvgStrokeWidth(vg, thickness);
-		nvgStroke(vg);
-
-		// Cable outline
-		nvgBeginPath(vg);
-		nvgMoveTo(vg, pos1.x, pos1.y);
-		nvgQuadTo(vg, pos3.x, pos3.y, pos2.x, pos2.y);
-		nvgStrokeColor(vg, colorOutline);
-		nvgStrokeWidth(vg, thickness);
-		nvgStroke(vg);
-
-		// Cable solid
-		nvgStrokeColor(vg, color);
-		nvgStrokeWidth(vg, thickness - 2);
-		nvgStroke(vg);
-
-		nvgRestore(vg);
+struct TintWidget : widget::Widget {
+	NVGcolor color = color::WHITE;
+	void draw(const DrawArgs& args) override {
+		nvgTint(args.vg, color);
+		Widget::draw(args);
 	}
-}
+};
+
+
+struct PlugLight : componentlibrary::TRedGreenBlueLight<app::MultiLightWidget> {
+	PlugLight() {
+		box.size = math::Vec(9, 9);
+	}
+};
+
+
+struct PlugWidget : widget::Widget {
+	float angle = 0.f;
+	PortWidget* portWidget = NULL;
+
+	widget::FramebufferWidget* fb;
+	widget::TransformWidget* plugTransform;
+	TintWidget* plugTint;
+	widget::SvgWidget* plug;
+
+	widget::SvgWidget* plugPort;
+
+	app::MultiLightWidget* plugLight;
+
+	PlugWidget() {
+		fb = new widget::FramebufferWidget;
+		addChild(fb);
+
+		plugTransform = new widget::TransformWidget;
+		fb->addChild(plugTransform);
+
+		plugTint = new TintWidget;
+		plugTransform->addChild(plugTint);
+
+		plug = new widget::SvgWidget;
+		plug->setSvg(window::Svg::load(asset::system("res/ComponentLibrary/Plug.svg")));
+		plugTint->addChild(plug);
+		plugTransform->setSize(plug->getSize());
+		plugTransform->setPosition(plug->getSize().mult(-0.5));
+		plugTint->setSize(plug->getSize());
+
+		plugPort = new widget::SvgWidget;
+		plugPort->setSvg(window::Svg::load(asset::system("res/ComponentLibrary/PlugPort.svg")));
+		plugPort->setPosition(plugPort->getSize().mult(-0.5));
+		fb->addChild(plugPort);
+
+		plugLight = new PlugLight;
+		plugLight->setPosition(plugLight->getSize().mult(-0.5));
+		addChild(plugLight);
+
+		setSize(plug->getSize());
+	}
+
+	void step() override {
+		std::vector<float> values(3);
+		if (portWidget && plugLight->isVisible()) {
+			engine::Port* port = portWidget->getPort();
+			if (port) {
+				for (int i = 0; i < 3; i++) {
+					values[i] = port->plugLights[i].getBrightness();
+				}
+			}
+		}
+		plugLight->setBrightnesses(values);
+
+		Widget::step();
+	}
+
+	void setColor(NVGcolor color) {
+		if (color::isEqual(color, plugTint->color))
+			return;
+		plugTint->color = color;
+		fb->setDirty();
+	}
+
+	void setAngle(float angle) {
+		if (angle == this->angle)
+			return;
+		this->angle = angle;
+		plugTransform->identity();
+		plugTransform->rotate(angle - 0.5f * M_PI, plug->getSize().div(2));
+		fb->setDirty();
+	}
+
+	void setPortWidget(PortWidget* portWidget) {
+		this->portWidget = portWidget;
+	}
+
+	void setTop(bool top) {
+		plugLight->setVisible(top);
+	}
+};
+
+
+struct CableWidget::Internal {
+};
 
 
 CableWidget::CableWidget() {
-	cable = new engine::Cable;
-
+	internal = new Internal;
 	color = color::BLACK_TRANSPARENT;
+
+	inputPlug = new PlugWidget;
+	addChild(inputPlug);
+
+	outputPlug = new PlugWidget;
+	addChild(outputPlug);
+}
+
+CableWidget::~CableWidget() {
+	setCable(NULL);
+	delete internal;
+}
+
+void CableWidget::setNextCableColor() {
 	if (!settings::cableColors.empty()) {
 		int id = APP->scene->rack->nextCableColorId++;
 		APP->scene->rack->nextCableColorId %= settings::cableColors.size();
@@ -91,29 +144,63 @@ CableWidget::CableWidget() {
 	}
 }
 
-CableWidget::~CableWidget() {
-	delete cable;
-}
-
 bool CableWidget::isComplete() {
 	return outputPort && inputPort;
 }
 
-void CableWidget::setOutput(PortWidget* outputPort) {
-	this->outputPort = outputPort;
-	if (outputPort) {
-		assert(outputPort->type == PortWidget::OUTPUT);
+void CableWidget::updateCable() {
+	if (cable) {
+		APP->engine->removeCable(cable);
+		delete cable;
+		cable = NULL;
+	}
+	if (inputPort && outputPort) {
+		cable = new engine::Cable;
+		cable->inputModule = inputPort->module;
+		cable->inputId = inputPort->portId;
 		cable->outputModule = outputPort->module;
 		cable->outputId = outputPort->portId;
+		APP->engine->addCable(cable);
 	}
 }
 
-void CableWidget::setInput(PortWidget* inputPort) {
-	this->inputPort = inputPort;
+void CableWidget::setCable(engine::Cable* cable) {
+	if (this->cable) {
+		APP->engine->removeCable(this->cable);
+		delete this->cable;
+		this->cable = NULL;
+	}
+	this->cable = cable;
+	if (cable) {
+		app::ModuleWidget* outputModule = APP->scene->rack->getModule(cable->outputModule->id);
+		assert(outputModule);
+		outputPort = outputModule->getOutput(cable->outputId);
+		assert(outputPort);
+
+		app::ModuleWidget* inputModule = APP->scene->rack->getModule(cable->inputModule->id);
+		assert(inputModule);
+		inputPort = inputModule->getInput(cable->inputId);
+		assert(inputPort);
+	}
+	else {
+		outputPort = NULL;
+		inputPort = NULL;
+	}
+}
+
+engine::Cable* CableWidget::getCable() {
+	return cable;
+}
+
+math::Vec CableWidget::getInputPos() {
 	if (inputPort) {
-		assert(inputPort->type == PortWidget::INPUT);
-		cable->inputModule = inputPort->module;
-		cable->inputId = inputPort->portId;
+		return inputPort->getRelativeOffset(inputPort->box.zeroPos().getCenter(), APP->scene->rack);
+	}
+	else if (hoveredInputPort) {
+		return hoveredInputPort->getRelativeOffset(hoveredInputPort->box.zeroPos().getCenter(), APP->scene->rack);
+	}
+	else {
+		return APP->scene->rack->getMousePos();
 	}
 }
 
@@ -125,128 +212,80 @@ math::Vec CableWidget::getOutputPos() {
 		return hoveredOutputPort->getRelativeOffset(hoveredOutputPort->box.zeroPos().getCenter(), APP->scene->rack);
 	}
 	else {
-		return APP->scene->rack->mousePos;
+		return APP->scene->rack->getMousePos();
 	}
 }
 
-math::Vec CableWidget::getInputPos() {
-	if (inputPort) {
-		return inputPort->getRelativeOffset(inputPort->box.zeroPos().getCenter(), APP->scene->rack);
-	}
-	else if (hoveredInputPort) {
-		return hoveredInputPort->getRelativeOffset(hoveredInputPort->box.zeroPos().getCenter(), APP->scene->rack);
-	}
-	else {
-		return APP->scene->rack->mousePos;
-	}
-}
-
-json_t* CableWidget::toJson() {
-	assert(isComplete());
-	json_t* rootJ = json_object();
-
-	json_object_set_new(rootJ, "id", json_integer(cable->id));
-	json_object_set_new(rootJ, "outputModuleId", json_integer(cable->outputModule->id));
-	json_object_set_new(rootJ, "outputId", json_integer(cable->outputId));
-	json_object_set_new(rootJ, "inputModuleId", json_integer(cable->inputModule->id));
-	json_object_set_new(rootJ, "inputId", json_integer(cable->inputId));
-
+void CableWidget::mergeJson(json_t* rootJ) {
 	std::string s = color::toHexString(color);
 	json_object_set_new(rootJ, "color", json_string(s.c_str()));
-
-	return rootJ;
 }
 
 void CableWidget::fromJson(json_t* rootJ) {
-	// outputModuleId
-	json_t* outputModuleIdJ = json_object_get(rootJ, "outputModuleId");
-	if (!outputModuleIdJ)
-		return;
-	int outputModuleId = json_integer_value(outputModuleIdJ);
-	ModuleWidget* outputModule = APP->scene->rack->getModule(outputModuleId);
-	if (!outputModule)
-		return;
-
-	// inputModuleId
-	json_t* inputModuleIdJ = json_object_get(rootJ, "inputModuleId");
-	if (!inputModuleIdJ)
-		return;
-	int inputModuleId = json_integer_value(inputModuleIdJ);
-	ModuleWidget* inputModule = APP->scene->rack->getModule(inputModuleId);
-	if (!inputModule)
-		return;
-
-	// outputId
-	json_t* outputIdJ = json_object_get(rootJ, "outputId");
-	if (!outputIdJ)
-		return;
-	int outputId = json_integer_value(outputIdJ);
-
-	// inputId
-	json_t* inputIdJ = json_object_get(rootJ, "inputId");
-	if (!inputIdJ)
-		return;
-	int inputId = json_integer_value(inputIdJ);
-
-	// Only set ID if unset
-	if (cable->id < 0) {
-		// id
-		json_t* idJ = json_object_get(rootJ, "id");
-		// Before 1.0, cables IDs were not used, so just leave it as default and Engine will assign one automatically.
-		if (idJ) {
-			cable->id = json_integer_value(idJ);
-		}
-	}
-
-	// Set ports
-	if (APP->patch->isLegacy(1)) {
-		// Before 0.6, the index of the "ports" array was the index of the PortWidget in the `outputs` and `inputs` vector.
-		setOutput(outputModule->outputs[outputId]);
-		setInput(inputModule->inputs[inputId]);
-	}
-	else {
-		for (PortWidget* port : outputModule->outputs) {
-			if (port->portId == outputId) {
-				setOutput(port);
-				break;
-			}
-		}
-		for (PortWidget* port : inputModule->inputs) {
-			if (port->portId == inputId) {
-				setInput(port);
-				break;
-			}
-		}
-	}
-	if (!isComplete())
-		return;
-
 	json_t* colorJ = json_object_get(rootJ, "color");
 	if (colorJ) {
-		// v0.6.0 and earlier patches use JSON objects. Just ignore them if so and use the existing cable color.
+		// In <v0.6.0, cables used JSON objects instead of hex strings. Just ignore them if so and use the existing cable color.
 		if (json_is_string(colorJ))
 			color = color::fromHexString(json_string_value(colorJ));
 	}
 }
 
+static math::Vec getSlumpPos(math::Vec pos1, math::Vec pos2) {
+	float dist = pos1.minus(pos2).norm();
+	math::Vec avg = pos1.plus(pos2).div(2);
+	// Lower average point as distance increases
+	avg.y += (1.0 - settings::cableTension) * (150.0 + 1.0 * dist);
+	return avg;
+}
+
+void CableWidget::step() {
+	math::Vec outputPos = getOutputPos();
+	math::Vec inputPos = getInputPos();
+	math::Vec slump = getSlumpPos(outputPos, inputPos);
+
+	// Draw output plug
+	bool outputTop = !isComplete() || APP->scene->rack->getTopCable(outputPort) == this;
+	outputPlug->setPosition(outputPos);
+	outputPlug->setTop(outputTop);
+	outputPlug->setAngle(slump.minus(outputPos).arg());
+	outputPlug->setColor(color);
+	outputPlug->setPortWidget(outputPort);
+
+	// Draw input plug
+	bool inputTop = !isComplete() || APP->scene->rack->getTopCable(inputPort) == this;
+	inputPlug->setPosition(inputPos);
+	inputPlug->setTop(inputTop);
+	inputPlug->setAngle(slump.minus(inputPos).arg());
+	inputPlug->setColor(color);
+	inputPlug->setPortWidget(inputPort);
+
+	Widget::step();
+}
+
 void CableWidget::draw(const DrawArgs& args) {
+	if (args.layer == 0) {
+		// Draw PlugWidgets
+		Widget::draw(args);
+		return;
+	}
+
 	float opacity = settings::cableOpacity;
-	float tension = settings::cableTension;
-	float thickness = 5;
+	bool thick = false;
 
 	if (isComplete()) {
 		engine::Output* output = &cable->outputModule->outputs[cable->outputId];
-		// Draw opaque if mouse is hovering over a connected port
-		if (output->channels > 1) {
-			// Increase thickness if output port is polyphonic
-			thickness = 9;
+		// Increase thickness if output port is polyphonic
+		if (output->isPolyphonic()) {
+			thick = true;
 		}
 
-		if (outputPort->hovered || inputPort->hovered) {
+		// Draw opaque if mouse is hovering over a connected port
+		Widget* hoveredWidget = APP->event->hoveredWidget;
+		if (outputPort == hoveredWidget || inputPort == hoveredWidget) {
 			opacity = 1.0;
 		}
-		else if (output->channels == 0) {
-			// Draw translucent cable if not active (i.e. 0 channels)
+		// Draw translucent cable if not active (i.e. 0 channels)
+		else if (output->getChannels() == 0) {
 			opacity *= 0.5;
 		}
 	}
@@ -255,36 +294,56 @@ void CableWidget::draw(const DrawArgs& args) {
 		opacity = 1.0;
 	}
 
+	if (opacity <= 0.0)
+		return;
+	nvgAlpha(args.vg, std::pow(opacity, 1.5));
+
 	math::Vec outputPos = getOutputPos();
 	math::Vec inputPos = getInputPos();
-	drawCable(args.vg, outputPos, inputPos, color, thickness, tension, opacity);
+
+	float thickness = thick ? 9.0 : 6.0;
+
+	// The endpoints are off-center
+	math::Vec slump = getSlumpPos(outputPos, inputPos);
+	outputPos = outputPos.plus(slump.minus(outputPos).normalize().mult(13.0));
+	inputPos = inputPos.plus(slump.minus(inputPos).normalize().mult(13.0));
+
+	nvgLineCap(args.vg, NVG_ROUND);
+	// Avoids glitches when cable is bent
+	nvgLineJoin(args.vg, NVG_ROUND);
+
+	if (args.layer == 1) {
+		// Draw cable shadow
+		math::Vec shadowSlump = slump.plus(math::Vec(0, 30));
+		nvgBeginPath(args.vg);
+		nvgMoveTo(args.vg, VEC_ARGS(outputPos));
+		nvgQuadTo(args.vg, VEC_ARGS(shadowSlump), VEC_ARGS(inputPos));
+		NVGcolor shadowColor = nvgRGBAf(0, 0, 0, 0.10);
+		nvgStrokeColor(args.vg, shadowColor);
+		nvgStrokeWidth(args.vg, thickness - 1.0);
+		nvgStroke(args.vg);
+	}
+	else if (args.layer == 2) {
+		// Draw cable outline
+		nvgBeginPath(args.vg);
+		nvgMoveTo(args.vg, VEC_ARGS(outputPos));
+		nvgQuadTo(args.vg, VEC_ARGS(slump), VEC_ARGS(inputPos));
+		// nvgStrokePaint(args.vg, nvgLinearGradient(args.vg, VEC_ARGS(outputPos), VEC_ARGS(inputPos), color::mult(color, 0.5), color));
+		nvgStrokeColor(args.vg, color::mult(color, 0.8));
+		nvgStrokeWidth(args.vg, thickness);
+		nvgStroke(args.vg);
+
+		// Draw cable
+		nvgStrokeColor(args.vg, color::mult(color, 0.95));
+		nvgStrokeWidth(args.vg, thickness - 1.0);
+		nvgStroke(args.vg);
+	}
 }
 
-void CableWidget::drawPlugs(const DrawArgs& args) {
-	math::Vec outputPos = getOutputPos();
-	math::Vec inputPos = getInputPos();
-
-	// Draw plug if the cable is on top, or if the cable is incomplete
-	if (!isComplete() || APP->scene->rack->getTopCable(outputPort) == this) {
-		drawPlug(args.vg, outputPos, color);
-		if (isComplete()) {
-			// Draw plug light
-			nvgSave(args.vg);
-			nvgTranslate(args.vg, outputPos.x - 4, outputPos.y - 4);
-			outputPort->plugLight->draw(args);
-			nvgRestore(args.vg);
-		}
-	}
-
-	if (!isComplete() || APP->scene->rack->getTopCable(inputPort) == this) {
-		drawPlug(args.vg, inputPos, color);
-		if (isComplete()) {
-			nvgSave(args.vg);
-			nvgTranslate(args.vg, inputPos.x - 4, inputPos.y - 4);
-			inputPort->plugLight->draw(args);
-			nvgRestore(args.vg);
-		}
-	}
+engine::Cable* CableWidget::releaseCable() {
+	engine::Cable* cable = this->cable;
+	this->cable = NULL;
+	return cable;
 }
 
 

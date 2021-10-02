@@ -1,56 +1,39 @@
-#include <random.hpp>
-#include <math.hpp>
+#include <atomic>
+
 #include <time.h>
 #include <sys/time.h>
+
+#include <random.hpp>
+#include <math.hpp>
 
 
 namespace rack {
 namespace random {
 
 
-// xoroshiro128+
-// from http://xoroshiro.di.unimi.it/xoroshiro128plus.c
+thread_local Xoroshiro128Plus rng;
+static std::atomic<uint64_t> threadCounter {0};
 
-thread_local uint64_t xoroshiro128plus_state[2];
-
-static uint64_t rotl(const uint64_t x, int k) {
-	return (x << k) | (x >> (64 - k));
-}
-
-static uint64_t xoroshiro128plus_next(void) {
-	const uint64_t s0 = xoroshiro128plus_state[0];
-	uint64_t s1 = xoroshiro128plus_state[1];
-	const uint64_t result = s0 + s1;
-
-	s1 ^= s0;
-	xoroshiro128plus_state[0] = rotl(s0, 55) ^ s1 ^ (s1 << 14); // a, b
-	xoroshiro128plus_state[1] = rotl(s1, 36); // c
-
-	return result;
-}
 
 void init() {
+	// Don't reset state if already seeded
+	if (rng.isSeeded())
+		return;
+
 	struct timeval tv;
 	gettimeofday(&tv, NULL);
-	xoroshiro128plus_state[0] = tv.tv_sec;
-	xoroshiro128plus_state[1] = tv.tv_usec;
-	// Generate a few times to fix the fact that the time is not a uniform u64
-	for (int i = 0; i < 10; i++) {
-		xoroshiro128plus_next();
+	rng.seed(uint64_t(tv.tv_sec) * 1000 * 1000 + tv.tv_usec, threadCounter++);
+	// Shift state a few times due to low seed entropy
+	for (int i = 0; i < 4; i++) {
+		rng();
 	}
 }
 
-uint32_t u32() {
-	return xoroshiro128plus_next() >> 32;
+
+Xoroshiro128Plus& get() {
+	return rng;
 }
 
-uint64_t u64() {
-	return xoroshiro128plus_next();
-}
-
-float uniform() {
-	return (xoroshiro128plus_next() >> (64 - 24)) / std::pow(2.f, 24);
-}
 
 float normal() {
 	// Box-Muller transform
@@ -65,6 +48,27 @@ float normal() {
 	// 	sum += uniform();
 	// }
 	// return (sum - n / 2.f) / std::sqrt(n / 12.f);
+}
+
+
+void buffer(uint8_t* out, size_t len) {
+	for (size_t i = 0; i < len; i += 4) {
+		uint64_t r = u64();
+		out[i] = r;
+		if (i + 1 < len)
+			out[i + 1] = r >> 8;
+		if (i + 2 < len)
+			out[i + 2] = r >> 16;
+		if (i + 3 < len)
+			out[i + 3] = r >> 24;
+	}
+}
+
+
+std::vector<uint8_t> vector(size_t len) {
+	std::vector<uint8_t> v(len);
+	buffer(v.data(), len);
+	return v;
 }
 
 

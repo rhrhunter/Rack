@@ -1,11 +1,10 @@
 #pragma once
+#include <speex/speex_resampler.h>
+
 #include <dsp/common.hpp>
 #include <dsp/ringbuffer.hpp>
 #include <dsp/fir.hpp>
 #include <dsp/window.hpp>
-#include <assert.h>
-#include <string.h>
-#include <speex/speex_resampler.h>
 
 
 namespace rack {
@@ -80,8 +79,8 @@ struct SampleRateConverter {
 		assert(outFrames);
 		if (st) {
 			// Resample each channel at a time
-			spx_uint32_t inLen;
-			spx_uint32_t outLen;
+			spx_uint32_t inLen = 0;
+			spx_uint32_t outLen = 0;
 			for (int i = 0; i < channels; i++) {
 				inLen = *inFrames;
 				outLen = *outFrames;

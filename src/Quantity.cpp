@@ -1,3 +1,5 @@
+#include <tinyexpr.h>
+
 #include <Quantity.hpp>
 #include <string.hpp>
 
@@ -5,41 +7,123 @@
 namespace rack {
 
 
+float Quantity::getDisplayValue() {
+	return getValue();
+}
+
+void Quantity::setDisplayValue(float displayValue) {
+	setValue(displayValue);
+}
+
 int Quantity::getDisplayPrecision() {
 	return 5;
 }
 
 std::string Quantity::getDisplayValueString() {
-	return string::f("%.*g", getDisplayPrecision(), math::normalizeZero(getDisplayValue()));
+	float v = getDisplayValue();
+	if (std::isnan(v))
+		return "NaN";
+	return string::f("%.*g", getDisplayPrecision(), math::normalizeZero(v));
 }
 
 void Quantity::setDisplayValueString(std::string s) {
-	float v = 0.f;
-	char suffix[2];
-	int n = std::sscanf(s.c_str(), "%f%1s", &v, suffix);
-	if (n >= 2) {
-		// Parse SI prefixes
-		switch (suffix[0]) {
-			case 'n': v *= 1e-9f; break;
-			case 'u': v *= 1e-6f; break;
-			case 'm': v *= 1e-3f; break;
-			case 'k': v *= 1e3f; break;
-			case 'M': v *= 1e6f; break;
-			case 'G': v *= 1e9f; break;
-			default: break;
-		}
-	}
-	if (n >= 1)
-		setDisplayValue(v);
+	static const double inf = INFINITY;
+	static te_variable vars[] = {
+		{"inf", &inf, TE_VARIABLE, NULL},
+	};
+	te_expr* expr = te_compile(s.c_str(), vars, LENGTHOF(vars), NULL);
+	if (!expr)
+		return;
+
+	double result = te_eval(expr);
+	te_free(expr);
+	if (std::isnan(result))
+		return;
+
+	setDisplayValue(result);
 }
 
 std::string Quantity::getString() {
 	std::string s;
 	std::string label = getLabel();
-	if (!label.empty())
-		s += label + ": ";
-	s += getDisplayValueString() + getUnit();
+	std::string valueString = getDisplayValueString() + getUnit();
+	s += label;
+	if (label != "" && valueString != "")
+		s += ": ";
+	s += valueString;
 	return s;
+}
+
+void Quantity::reset() {
+	setValue(getDefaultValue());
+}
+
+void Quantity::randomize() {
+	if (isBounded())
+		setScaledValue(random::uniform());
+}
+
+bool Quantity::isMin() {
+	return getValue() <= getMinValue();
+}
+
+bool Quantity::isMax() {
+	return getValue() >= getMaxValue();
+}
+
+void Quantity::setMin() {
+	setValue(getMinValue());
+}
+
+void Quantity::setMax() {
+	setValue(getMaxValue());
+}
+
+void Quantity::toggle() {
+	setValue(isMin() ? getMaxValue() : getMinValue());
+}
+
+void Quantity::moveValue(float deltaValue) {
+	setValue(getValue() + deltaValue);
+}
+
+float Quantity::getRange() {
+	return getMaxValue() - getMinValue();
+}
+
+bool Quantity::isBounded() {
+	return std::isfinite(getMinValue()) && std::isfinite(getMaxValue());
+}
+
+float Quantity::toScaled(float value) {
+	if (!isBounded())
+		return value;
+	else if (getMinValue() == getMaxValue())
+		return 0.f;
+	else
+		return math::rescale(value, getMinValue(), getMaxValue(), 0.f, 1.f);
+}
+
+float Quantity::fromScaled(float scaledValue) {
+	if (!isBounded())
+		return scaledValue;
+	else
+		return math::rescale(scaledValue, 0.f, 1.f, getMinValue(), getMaxValue());
+}
+
+void Quantity::setScaledValue(float scaledValue) {
+	setValue(fromScaled(scaledValue));
+}
+
+float Quantity::getScaledValue() {
+	return toScaled(getValue());
+}
+
+void Quantity::moveScaledValue(float deltaScaledValue) {
+	if (!isBounded())
+		moveValue(deltaScaledValue);
+	else
+		moveValue(deltaScaledValue * getRange());
 }
 
 

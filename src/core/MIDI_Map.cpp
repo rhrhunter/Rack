@@ -24,6 +24,7 @@ struct MIDI_Map : Module {
 
 	midi::InputQueue midiInput;
 
+	bool smooth;
 	/** Number of maps */
 	int mapLen = 0;
 	/** The mapped CC number of each channel */
@@ -65,6 +66,7 @@ struct MIDI_Map : Module {
 	}
 
 	void onReset() override {
+		smooth = true;
 		learningId = -1;
 		learnedCc = false;
 		learnedParam = false;
@@ -77,53 +79,54 @@ struct MIDI_Map : Module {
 	}
 
 	void process(const ProcessArgs& args) override {
-		if (divider.process()) {
-			midi::Message msg;
-			while (midiInput.shift(&msg)) {
-				processMessage(msg);
-			}
+		if (!divider.process())
+			return;
 
-			// Step channels
-			for (int id = 0; id < mapLen; id++) {
-				int cc = ccs[id];
-				if (cc < 0)
-					continue;
-				// Get Module
-				Module* module = paramHandles[id].module;
-				if (!module)
-					continue;
-				// Get ParamQuantity from ParamHandle
-				int paramId = paramHandles[id].paramId;
-				ParamQuantity* paramQuantity = module->paramQuantities[paramId];
-				if (!paramQuantity)
-					continue;
-				if (!paramQuantity->isBounded())
-					continue;
-				// Set filter from param value if filter is uninitialized
-				if (!filterInitialized[id]) {
-					valueFilters[id].out = paramQuantity->getScaledValue();
-					filterInitialized[id] = true;
-					continue;
-				}
-				// Check if CC has been set by the MIDI device
-				if (values[cc] < 0)
-					continue;
-				float value = values[cc] / 127.f;
-				// Detect behavior from MIDI buttons.
-				if (std::fabs(valueFilters[id].out - value) >= 1.f) {
-					// Jump value
-					valueFilters[id].out = value;
-				}
-				else {
-					// Smooth value with filter
-					valueFilters[id].process(args.sampleTime * divider.getDivision(), value);
-				}
-				paramQuantity->setScaledValue(valueFilters[id].out);
+		midi::Message msg;
+		while (midiInput.tryPop(&msg, args.frame)) {
+			processMessage(msg);
+		}
+
+		// Step channels
+		for (int id = 0; id < mapLen; id++) {
+			int cc = ccs[id];
+			if (cc < 0)
+				continue;
+			// Get Module
+			Module* module = paramHandles[id].module;
+			if (!module)
+				continue;
+			// Get ParamQuantity from ParamHandle
+			int paramId = paramHandles[id].paramId;
+			ParamQuantity* paramQuantity = module->paramQuantities[paramId];
+			if (!paramQuantity)
+				continue;
+			if (!paramQuantity->isBounded())
+				continue;
+			// Set filter from param value if filter is uninitialized
+			if (!filterInitialized[id]) {
+				valueFilters[id].out = paramQuantity->getScaledValue();
+				filterInitialized[id] = true;
+				continue;
 			}
+			// Check if CC has been set by the MIDI device
+			if (values[cc] < 0)
+				continue;
+			float value = values[cc] / 127.f;
+			// Detect behavior from MIDI buttons.
+			if (smooth && std::fabs(valueFilters[id].out - value) < 1.f) {
+				// Smooth value with filter
+				valueFilters[id].process(args.sampleTime * divider.getDivision(), value);
+			}
+			else {
+				// Jump value
+				valueFilters[id].out = value;
+			}
+			paramQuantity->setScaledValue(valueFilters[id].out);
 		}
 	}
 
-	void processMessage(midi::Message msg) {
+	void processMessage(const midi::Message& msg) {
 		// DEBUG("MIDI: %01x %01x %02x %02x", msg.getStatus(), msg.getChannel(), msg.getNote(), msg.getValue());
 
 		switch (msg.getStatus()) {
@@ -135,7 +138,7 @@ struct MIDI_Map : Module {
 		}
 	}
 
-	void processCC(midi::Message msg) {
+	void processCC(const midi::Message& msg) {
 		uint8_t cc = msg.getNote();
 		int8_t value = msg.getValue();
 		// Learn
@@ -147,6 +150,9 @@ struct MIDI_Map : Module {
 			updateMapLen();
 			refreshParamHandleText(learningId);
 		}
+		// Ignore negative values generated using the nonstandard 8-bit MIDI extension from the gamepad driver
+		if (values[cc] < 0)
+			return;
 		values[cc] = value;
 	}
 
@@ -215,7 +221,7 @@ struct MIDI_Map : Module {
 		}
 	}
 
-	void learnParam(int id, int moduleId, int paramId) {
+	void learnParam(int id, int64_t moduleId, int paramId) {
 		APP->engine->updateParamHandle(&paramHandles[id], moduleId, paramId, true);
 		learnedParam = true;
 		commitLearn();
@@ -244,13 +250,13 @@ struct MIDI_Map : Module {
 		}
 		json_object_set_new(rootJ, "maps", mapsJ);
 
+		json_object_set_new(rootJ, "smooth", json_boolean(smooth));
 		json_object_set_new(rootJ, "midi", midiInput.toJson());
 		return rootJ;
 	}
 
 	void dataFromJson(json_t* rootJ) override {
 		clearMaps();
-
 		json_t* mapsJ = json_object_get(rootJ, "maps");
 		if (mapsJ) {
 			json_t* mapJ;
@@ -271,6 +277,10 @@ struct MIDI_Map : Module {
 
 		updateMapLen();
 
+		json_t* smoothJ = json_object_get(rootJ, "smooth");
+		if (smoothJ)
+			smooth = json_boolean_value(smoothJ);
+
 		json_t* midiJ = json_object_get(rootJ, "midi");
 		if (midiJ)
 			midiInput.fromJson(midiJ);
@@ -287,7 +297,7 @@ struct MIDI_MapChoice : LedDisplayChoice {
 		this->module = module;
 	}
 
-	void onButton(const event::Button& e) override {
+	void onButton(const ButtonEvent& e) override {
 		e.stopPropagating();
 		if (!module)
 			return;
@@ -302,7 +312,7 @@ struct MIDI_MapChoice : LedDisplayChoice {
 		}
 	}
 
-	void onSelect(const event::Select& e) override {
+	void onSelect(const SelectEvent& e) override {
 		if (!module)
 			return;
 
@@ -314,15 +324,15 @@ struct MIDI_MapChoice : LedDisplayChoice {
 		module->enableLearn(id);
 	}
 
-	void onDeselect(const event::Deselect& e) override {
+	void onDeselect(const DeselectEvent& e) override {
 		if (!module)
 			return;
 		// Check if a ParamWidget was touched
 		ParamWidget* touchedParam = APP->scene->rack->touchedParam;
 		if (touchedParam) {
 			APP->scene->rack->touchedParam = NULL;
-			int moduleId = touchedParam->paramQuantity->module->id;
-			int paramId = touchedParam->paramQuantity->paramId;
+			int64_t moduleId = touchedParam->module->id;
+			int paramId = touchedParam->paramId;
 			module->learnParam(id, moduleId, paramId);
 		}
 		else {
@@ -341,14 +351,14 @@ struct MIDI_MapChoice : LedDisplayChoice {
 
 			// HACK
 			if (APP->event->selectedWidget != this)
-				APP->event->setSelected(this);
+				APP->event->setSelectedWidget(this);
 		}
 		else {
 			bgColor = nvgRGBA(0, 0, 0, 0);
 
 			// HACK
 			if (APP->event->selectedWidget == this)
-				APP->event->setSelected(NULL);
+				APP->event->setSelectedWidget(NULL);
 		}
 
 		// Set text
@@ -400,7 +410,7 @@ struct MIDI_MapChoice : LedDisplayChoice {
 		std::string s;
 		s += mw->model->name;
 		s += " ";
-		s += paramQuantity->label;
+		s += paramQuantity->name;
 		return s;
 	}
 };
@@ -463,7 +473,7 @@ struct MIDI_MapDisplay : MidiWidget {
 struct MIDI_MapWidget : ModuleWidget {
 	MIDI_MapWidget(MIDI_Map* module) {
 		setModule(module);
-		setPanel(APP->window->loadSvg(asset::system("res/Core/MIDI-Map.svg")));
+		setPanel(Svg::load(asset::system("res/Core/MIDI-Map.svg")));
 
 		addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));
 		addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, 0)));
@@ -475,6 +485,14 @@ struct MIDI_MapWidget : ModuleWidget {
 		midiWidget->setMidiPort(module ? &module->midiInput : NULL);
 		midiWidget->setModule(module);
 		addChild(midiWidget);
+	}
+
+	void appendContextMenu(Menu* menu) override {
+		MIDI_Map* module = dynamic_cast<MIDI_Map*>(this->module);
+
+		menu->addChild(new MenuSeparator);
+
+		menu->addChild(createBoolPtrMenuItem("Smooth CC", &module->smooth));
 	}
 };
 
